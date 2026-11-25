@@ -6,7 +6,7 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.filmr.tv.model.*
 import com.filmr.tv.ui.*
-import com.filmr.tv.viewmodel.FilmrViewModel
+import com.filmr.tv.ui.FilmrViewModel
 class MainActivity : ComponentActivity() {
 override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent {
 val vm: FilmrViewModel = viewModel()
