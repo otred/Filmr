@@ -303,7 +303,6 @@ fun DualPlayerScreen(
                         Spacer(Modifier.width(16.dp))
                         Button(
                             onClick = { togglePlayPause() },
-                            colors = ButtonDefaults.colors(containerColor = Color(0xFFE50914))
                         ) {
                             Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                             Spacer(Modifier.width(6.dp))
@@ -363,9 +362,6 @@ fun DualPlayerScreen(
                                         activePanel = null
                                     },
                                     modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.colors(
-                                        containerColor = if (settings.seekStepSeconds == sec) Color(0xFFE50914) else Color(0xFF232A38)
-                                    )
                                 ) {
                                     Text("$sec ثواني", color = Color.White)
                                 }
@@ -406,9 +402,6 @@ fun DualPlayerScreen(
                                     Button(
                                         onClick = { selectedSubtitle = sub },
                                         modifier = Modifier.fillMaxWidth(),
-                                        colors = ButtonDefaults.colors(
-                                            containerColor = if (selectedSubtitle?.id == sub.id) Color(0xFFE50914) else Color(0xFF232A38)
-                                        )
                                     ) {
                                         Text(sub.label, color = Color.White, maxLines = 1)
                                     }
