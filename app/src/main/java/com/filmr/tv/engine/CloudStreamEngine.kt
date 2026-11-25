@@ -1,83 +1,65 @@
 package com.filmr.tv.engine
-
 import android.content.Context
-import com.filmr.tv.data.AddonEntity
-import com.filmr.tv.model.UnifiedStream
-import com.google.gson.Gson
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
-import dalvik.system.DexClassLoader
-import io.ktor.client.*
-import io.ktor.client.engine.android.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
+import com.filmr.tv.model.*
+import com.google.gson.JsonParser
+import kotlinx.coroutines.*
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.zip.ZipFile
 
-class CloudStreamEngine(private val context: Context) {
-    private val gson = Gson()
-    private val client = HttpClient(Android)
-    private val pluginsDir = File(context.filesDir, "cs3_plugins").apply { mkdirs() }
-
-    suspend fun parseRepository(repoUrl: String): Result<List<AddonEntity>> = runCatching {
-        val repoText = client.get(repoUrl.trim()).bodyAsText()
-        val repoJson = gson.fromJson(repoText, JsonObject::class.java)
-        val pluginLists = repoJson.getAsJsonArray("pluginLists") ?: return@runCatching emptyList<AddonEntity>()
-
-        val resultAddons = mutableListOf<AddonEntity>()
-        for (listEl in pluginLists) {
-            val listUrl = listEl.asString
-            val pluginsText = client.get(listUrl).bodyAsText()
-            val pluginsArray = gson.fromJson(pluginsText, JsonArray::class.java)
-            pluginsArray?.forEach { pEl ->
-                val p = pEl.asJsonObject
-                val cs3Url = p.get("url")?.asString ?: return@forEach
-                val name = p.get("name")?.asString ?: "CloudStream Plugin"
-                val desc = p.get("description")?.asString ?: "إضافة كلاود ستريم (.cs3)"
-                val icon = p.get("iconUrl")?.asString
-                resultAddons.add(
-                    AddonEntity(
-                        url = cs3Url,
-                        name = name,
-                        description = desc,
-                        iconUrl = icon,
-                        type = "CLOUDSTREAM",
-                        isEnabled = true
-                    )
-                )
+object CloudStreamEngine {
+    suspend fun installFromUrl(context: Context, repoUrl: String): Result<List<AddonEntity>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val clean = repoUrl.trim()
+            if (clean.endsWith(".cs3", true)) return@runCatching listOf(parseCs3File(context, clean))
+            val raw = (URL(clean).openConnection() as HttpURLConnection).apply { connectTimeout = 9000; readTimeout = 12000 }.inputStream.bufferedReader().use { it.readText() }
+            val json = JsonParser.parseString(raw)
+            val list = mutableListOf<AddonEntity>()
+            val pluginsUrl = if (json.isJsonObject) json.asJsonObject.getAsJsonArray("pluginLists")?.firstOrNull()?.asString ?: clean else clean
+            val pluginsRaw = if (pluginsUrl != clean) (URL(pluginsUrl).openConnection() as HttpURLConnection).inputStream.bufferedReader().use { it.readText() } else raw
+            val arr = JsonParser.parseString(pluginsRaw).asJsonArray
+            arr.forEachIndexed { idx, el ->
+                val p = el.asJsonObject
+                val u = p.get("url")?.asString ?: return@forEachIndexed
+                list.add(AddonEntity("cs:${p.get("internalName")?.asString ?: u.hashCode()}", p.get("name")?.asString ?: "CloudStream", u, p.get("description")?.takeIf { !it.isJsonNull }?.asString ?: "", p.get("iconUrl")?.takeIf { !it.isJsonNull }?.asString ?: "", "CloudStream", true, idx))
             }
+            list
         }
-        resultAddons
     }
 
-    suspend fun downloadAndLoadPlugin(addon: AddonEntity): DexClassLoader? = runCatching {
-        val fileName = "${addon.name.hashCode()}.cs3"
-        val targetFile = File(pluginsDir, fileName)
-        if (!targetFile.exists()) {
-            val bytes = client.get(addon.url).readBytes()
-            targetFile.writeBytes(bytes)
+    private fun parseCs3File(context: Context, url: String): AddonEntity {
+        val dir = File(context.filesDir, "cs3_plugins").apply { mkdirs() }
+        val file = File(dir, "plugin_${url.hashCode()}.cs3")
+        URL(url).openStream().use { inp -> file.outputStream().use { out -> inp.copyTo(out) } }
+        var name = file.nameWithoutExtension
+        runCatching {
+            ZipFile(file).use { zip ->
+                zip.getEntry("manifest.json")?.let { entry ->
+                    val m = JsonParser.parseString(zip.getInputStream(entry).bufferedReader().use { it.readText() }).asJsonObject
+                    name = m.get("name")?.asString ?: name
+                }
+            }
         }
-        targetFile.setReadOnly()
-        val optDir = File(context.cacheDir, "cs3_dex_opt").apply { mkdirs() }
-        DexClassLoader(
-            targetFile.absolutePath,
-            optDir.absolutePath,
-            null,
-            context.classLoader
-        )
-    }.getOrNull()
+        return AddonEntity("cs:${file.name}", name, file.absolutePath, "ملف إضافة CloudStream (.cs3)", "", "CloudStream", true, 0)
+    }
 
-    suspend fun fetchStreamsFromPlugin(
-        addon: AddonEntity,
-        queryTitle: String,
-        season: Int?,
-        episode: Int?
-    ): List<UnifiedStream> = runCatching {
-        val loader = downloadAndLoadPlugin(addon) ?: return emptyList<UnifiedStream>()
-        val manifestEntry = runCatching { loader.loadClass("com.lagradost.cloudstream3.plugins.Plugin") }.getOrNull()
-        if (manifestEntry != null) {
-            emptyList<UnifiedStream>()
-        } else {
-            emptyList<UnifiedStream>()
-        }
-    }.getOrDefault(emptyList<UnifiedStream>())
+    suspend fun fetchStreams(addons: List<AddonEntity>, title: String, season: Int = 1, episode: Int = 1): List<UnifiedStream> = coroutineScope {
+        val q = URLEncoder.encode(title, "UTF-8")
+        addons.filter { it.enabled && it.engineType == "CloudStream" && it.url.startsWith("http") }.map { addon ->
+            async(Dispatchers.IO) {
+                runCatching {
+                    val base = addon.url.substringBeforeLast("/")
+                    val raw = (URL("$base/search?q=$q&s=$season&e=$episode").openConnection() as HttpURLConnection).apply { connectTimeout = 6000; readTimeout = 8000 }.inputStream.bufferedReader().use { it.readText() }
+                    val arr = JsonParser.parseString(raw).asJsonArray
+                    arr.mapIndexedNotNull { idx, el ->
+                        val o = el.asJsonObject
+                        val u = o.get("url")?.asString ?: return@mapIndexedNotNull null
+                        UnifiedStream("${addon.id}_$idx", addon.name, o.get("title")?.asString ?: title, u, sourceName = addon.name, engineType = "CloudStream", quality = o.get("quality")?.asString ?: "1080p")
+                    }
+                }.getOrDefault(emptyList())
+            }
+        }.awaitAll().flatten()
+    }
 }
