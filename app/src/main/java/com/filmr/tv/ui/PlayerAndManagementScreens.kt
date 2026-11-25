@@ -1,7 +1,6 @@
 package com.filmr.tv.ui
-import android.view.ViewGroup
-import android.widget.FrameLayout
-import androidx.annotation.OptIn
+
+import android.net.Uri
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -13,171 +12,227 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.*
-import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.C
+import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.filmr.tv.engine.*
 import com.filmr.tv.model.*
 import kotlinx.coroutines.delay
-@OptIn(UnstableApi::class)
+import kotlinx.coroutines.launch
+
 @Composable
-fun FilmrPlayerScreen(item: MediaItem, stream: UnifiedStream, season: Int, episode: Int, epTitle: String, vm: FilmrViewModel, onBack: () -> Unit) {
+fun FilmrPlayerScreen(
+    item: MediaItem,
+    stream: UnifiedStream,
+    season: Int,
+    episode: Int,
+    epTitle: String,
+    vm: FilmrViewModel,
+    onBack: () -> Unit
+) {
     val ctx = LocalContext.current
     val settings by vm.settings.collectAsState()
-    val accent = Color(settings.accentHex)
+    var preparedSub by remember { mutableStateOf<Uri?>(null) }
     var skipSegments by remember { mutableStateOf<List<SkipSegment>>(emptyList()) }
-    var activeSkip by remember { mutableStateOf<SkipSegment?>(null) }
-    var preparedSub by remember { mutableStateOf<android.net.Uri?>(null) }
 
-    LaunchedEffect(stream.id) {
-        val subUrl = stream.subtitles.firstOrNull { it.lang.contains("ar", true) }?.url ?: stream.subtitles.firstOrNull()?.url
+    LaunchedEffect(stream.url) {
+        val subUrl = stream.subtitles.firstOrNull { it.lang.contains("ar", true) }?.url
+            ?: vm.fetchSubtitles(item, season, episode).firstOrNull { it.lang.contains("ar", true) }?.url
         if (!subUrl.isNullOrBlank()) preparedSub = ArabicSubtitleSanitizer.prepareSubtitle(ctx, subUrl)
         skipSegments = SkipAndTorrentEngine.fetchSkipSegments(item.imdbId, season, episode, settings.animeSkipClientId)
     }
+
     val player = remember(stream.url, preparedSub) {
         ExoPlayer.Builder(ctx).build().apply {
-            val builder = MediaItem.Builder().setUri(stream.url)
+            val builder = androidx.media3.common.MediaItem.Builder().setUri(stream.url)
             preparedSub?.let { uri ->
-                builder.setSubtitleConfigurations(listOf(MediaItem.SubtitleConfiguration.Builder(uri).setMimeType(MimeTypes.APPLICATION_SUBRIP).setLanguage("ar").setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()))
+                builder.setSubtitleConfigurations(
+                    listOf(
+                        androidx.media3.common.MediaItem.SubtitleConfiguration.Builder(uri)
+                            .setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                            .setLanguage("ar")
+                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                            .build()
+                    )
+                )
             }
             setMediaItem(builder.build())
             prepare()
             playWhenReady = true
         }
     }
-    LaunchedEffect(player, skipSegments) {
+
+    LaunchedEffect(player) {
         while (true) {
-            delay(1000)
-            val pos = player.currentPosition
-            val dur = player.duration.coerceAtLeast(0L)
-            activeSkip = skipSegments.firstOrNull { pos in it.startMs..it.endMs }
-            if (pos > 5000L && dur > 0L) vm.saveProgress(item, season, episode, epTitle, pos, dur)
+            delay(5000)
+            if (player.duration > 0) vm.saveProgress(item, season, episode, player.currentPosition, player.duration)
         }
     }
+
     DisposableEffect(player) { onDispose { player.release() } }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = {
-            PlayerView(it).apply {
-                this.player = player
-                useController = true
-                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            }
-        }, modifier = Modifier.fillMaxSize())
-        Row(modifier = Modifier.align(Alignment.TopStart).padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            IconButton(onClick = onBack, modifier = Modifier.background(Color(0x99000000), RoundedCornerShape(10.dp))) { Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White) }
-            Text("${item.displayTitle}${if (item.type == "series") " • م$season:ح$episode" else ""}", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.background(Color(0x88000000), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 6.dp))
+        AndroidView(factory = { PlayerView(it).apply { this.player = player } }, modifier = Modifier.fillMaxSize())
+        IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(Color(0x88000000), RoundedCornerShape(50))) {
+            Icon(Icons.Filled.ArrowBack, null, tint = Color.White)
         }
-        activeSkip?.let { seg ->
-            Button(onClick = { player.seekTo(seg.endMs) }, colors = ButtonDefaults.buttonColors(containerColor = accent), modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)) {
-                Icon(Icons.Default.FastForward, contentDescription = null); Spacer(Modifier.width(6.dp)); Text(seg.label, fontWeight = FontWeight.Bold)
+        val activeSkip = skipSegments.firstOrNull { player.currentPosition in it.startMs..it.endMs }
+        if (activeSkip != null) {
+            Button(
+                onClick = { player.seekTo(activeSkip.endMs) },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(settings.accentHex))
+            ) {
+                Text("تخطي ${activeSkip.label}")
             }
         }
     }
 }
+
 @Composable
 fun SearchScreen(vm: FilmrViewModel, onBack: () -> Unit, onOpenDetails: (MediaItem) -> Unit) {
+    val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
-    val results by vm.searchResults.collectAsState()
-    val settings by vm.settings.collectAsState()
-    val accent = Color(settings.accentHex)
+    var results by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF050507)).padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White) }
-            OutlinedTextField(value = query, onValueChange = { query = it; if (it.length >= 2) vm.search(it) }, placeholder = { Text("ابحث عن فيلم أو مسلسل...") }, singleLine = true, modifier = Modifier.weight(1f), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = accent))
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0A0B0E)).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = Color.White) }
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    if (it.length >= 2) scope.launch { results = vm.search(it) }
+                },
+                placeholder = { Text("ابحث عن فيلم أو مسلسل...") },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
         }
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(results, key = { it.tmdbId }) { m ->
-                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF14161D)).clickable { onOpenDetails(m) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(model = m.displayPoster, contentDescription = null, modifier = Modifier.width(64.dp).height(94.dp).clip(RoundedCornerShape(6.dp)))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(m.displayTitle, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        Text("${if (m.type == "series") "مسلسل" else "فيلم"} • ${m.year} • ★ ${"%.1f".format(m.rating)}", color = Color(0xFFB0B3B8), fontSize = 12.sp)
+            items(results) { item ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF14161D)).clickable { onOpenDetails(item) }.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsyncImage(model = item.displayPoster, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.width(60.dp).height(85.dp).clip(RoundedCornerShape(6.dp)))
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(item.displayTitle, color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(item.year, color = Color.Gray, fontSize = 12.sp)
                     }
                 }
             }
         }
     }
 }
+
 @Composable
 fun AddonsAndSyncScreen(vm: FilmrViewModel, onBack: () -> Unit) {
     val addons by vm.addons.collectAsState()
-    val settings by vm.settings.collectAsState()
-    val status by vm.statusMsg.collectAsState()
-    val accent = Color(settings.accentHex)
-    var urlInput by remember { mutableStateOf("") }
-    var engineType by remember { mutableStateOf("Stremio") }
-    var email by remember { mutableStateOf(settings.stremioEmail) }
+    val session by vm.session.collectAsState()
+    var addonUrl by remember { mutableStateOf("") }
+    var repoUrl by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
 
-    LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFF050507)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFF0A0B0E)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White) }
-                Text("الإضافات ومزامنة Stremio & CloudStream", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = Color.White) }
+                Text("الإضافات ومزامنة Stremio", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
-            if (status.isNotBlank()) Text(status, color = accent, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
         }
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF14161D))) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("مزامنة حساب Stremio", color = Color.White, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("البريد الإلكتروني") }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White))
-                    OutlinedTextField(value = pass, onValueChange = { pass = it }, label = { Text("كلمة المرور") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White))
+            Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF14161D), RoundedCornerShape(12.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("حساب Stremio", color = Color.White, fontWeight = FontWeight.Bold)
+                if (session != null) {
+                    Text("مسجل كـ: ${session!!.email}", color = Color.Green)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { vm.loginStremio(email, pass) }, colors = ButtonDefaults.buttonColors(containerColor = accent)) { Text("تسجيل ومزامنة") }
-                        if (settings.stremioAuthKey.isNotBlank()) OutlinedButton(onClick = { vm.syncStremioNow() }) { Text("تحديث الآن", color = Color.White) }
+                        Button(onClick = { vm.fetchUserAddonsFromAccount(session!!.authKey) }) { Text("مزامنة الإضافات") }
+                        OutlinedButton(onClick = { vm.logoutStremio() }) { Text("تسجيل خروج") }
                     }
+                } else {
+                    OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("البريد الإلكتروني") }, singleLine = true)
+                    OutlinedTextField(value = pass, onValueChange = { pass = it }, label = { Text("كلمة المرور") }, singleLine = true)
+                    Button(onClick = { vm.loginStremio(email, pass) }) { Text("تسجيل الدخول") }
                 }
             }
         }
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF14161D))) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("تثبيت إضافة جديدة", color = Color.White, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = engineType == "Stremio", onClick = { engineType = "Stremio" }, label = { Text("Stremio Manifest") })
-                        FilterChip(selected = engineType == "CloudStream", onClick = { engineType = "CloudStream" }, label = { Text("CloudStream Repo / .cs3") })
-                    }
-                    OutlinedTextField(value = urlInput, onValueChange = { urlInput = it }, placeholder = { Text("https://.../manifest.json أو رابط .cs3") }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White))
-                    Button(onClick = { if (urlInput.isNotBlank()) { vm.installAddon(urlInput, engineType); urlInput = "" } }, colors = ButtonDefaults.buttonColors(containerColor = accent)) { Text("تثبيت الإضافة") }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(value = addonUrl, onValueChange = { addonUrl = it }, label = { Text("رابط إضافة Stremio") }, modifier = Modifier.weight(1f), singleLine = true)
+                Button(onClick = { if (addonUrl.isNotBlank()) { vm.addAddon(addonUrl); addonUrl = "" } }) { Text("إضافة") }
             }
         }
-        items(addons, key = { it.id }) { ad ->
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF14161D))) {
-                Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("${ad.name} (${ad.engineType})", color = Color.White, fontWeight = FontWeight.Bold)
-                        Text(ad.description.ifBlank { ad.url }, color = Color(0xFF9EA3AE), fontSize = 12.sp, maxLines = 1)
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(value = repoUrl, onValueChange = { repoUrl = it }, label = { Text("رابط مستودع CloudStream") }, modifier = Modifier.weight(1f), singleLine = true)
+                Button(onClick = { if (repoUrl.isNotBlank()) { vm.syncCloudStreamRepo(repoUrl); repoUrl = "" } }) { Text("جلب") }
+            }
+        }
+        items(addons) { addon ->
+            Row(modifier = Modifier.fillMaxWidth().background(Color(0xFF14161D), RoundedCornerShape(10.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(addon.name, color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(addon.description, color = Color.Gray, fontSize = 12.sp, maxLines = 1)
+                }
+                Switch(checked = addon.isEnabled, onCheckedChange = { vm.toggleAddon(addon) })
+                IconButton(onClick = { vm.deleteAddon(addon.id) }) { Icon(Icons.Filled.Delete, null, tint = Color.Red) }
+            }
+        }
+    }
+}
+
+@Composable
+fun CalendarAndSettingsScreen(isCalendar: Boolean, vm: FilmrViewModel, onBack: () -> Unit, onOpenDetails: (MediaItem) -> Unit) {
+    val settings by vm.settings.collectAsState()
+    val library by vm.library.collectAsState()
+    val activeProfile by vm.activeProfile.collectAsState()
+    var mdbKey by remember { mutableStateOf(settings.mdbListApiKey) }
+    var animeKey by remember { mutableStateOf(settings.animeSkipClientId) }
+
+    LazyColumn(modifier = Modifier.fillMaxSize().background(Color(0xFF0A0B0E)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = Color.White) }
+                Text(if (isCalendar) "الجدول والمكتبة" else "الإعدادات", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        if (isCalendar) {
+            items(library) { item ->
+                Row(modifier = Modifier.fillMaxWidth().background(Color(0xFF14161D), RoundedCornerShape(10.dp)).clickable { onOpenDetails(item) }.padding(12.dp)) {
+                    Text(item.displayTitle, color = Color.White)
+                }
+            }
+        } else {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    vm.profiles.forEach { p ->
+                        FilterChip(selected = activeProfile.id == p.id, onClick = { vm.selectProfile(p) }, label = { Text(p.name) })
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = ad.enabled, onCheckedChange = { vm.toggleAddon(ad.id, it) })
-                        IconButton(onClick = { vm.deleteAddon(ad.id) }) { Icon(Icons.Default.Delete, contentDescription = "حذف", tint = Color(0xFFE57373)) }
-                    }
+                }
+            }
+            item {
+                OutlinedTextField(value = mdbKey, onValueChange = { mdbKey = it; vm.updateSettings { s -> s.copy(mdbListApiKey = it) } }, label = { Text("MDBList Key") }, singleLine = true)
+            }
+            item {
+                OutlinedTextField(value = animeKey, onValueChange = { animeKey = it; vm.updateSettings { s -> s.copy(animeSkipClientId = it) } }, label = { Text("AnimeSkip ID") }, singleLine = true)
+            }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("شاشة سوداء بالكامل (AMOLED)", color = Color.White, modifier = Modifier.weight(1f))
+                    Switch(checked = settings.amoledBlack, onCheckedChange = { v -> vm.updateSettings { it.copy(amoledBlack = v) } })
                 }
             }
         }
     }
 }
-@Composable
-fun CalendarAndSettingsScreen(isCalendar: Boolean, vm: FilmrViewModel, onBack: () -> Unit, onOpenDetails: (MediaItem) -> Unit) {
-    val library by vm.library.collectAsState()
-    val settings by vm.settings.collectAsState()
-    var mdbKey by remember { mutableStateOf(settings.mdbListApiKey) }
-    var animeKey by remember { mutableStateOf(settings.animeSkipClientId) }
-    LazyColumn(Modifier.fillMaxSize().background(Color(0xFF050507)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Row(verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) }; Text(if (isCalendar) "المكتبة والتقويم" else "الإعدادات", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) } }
-item {
-Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { vm.profiles.forEach { p -> FilterChip(selected = vm.activeProfile.collectAsState().value.id == p.id, onClick = { vm.selectProfile(p) }, label = { Text(p.name) }) } }
-item { OutlinedTextField(value = mdbKey, onValueChange = { mdbKey = it; vm.updateSettings { s -> s.copy(mdbListApiKey = it) } }, label = { Text("MDBList Key") }, singleLine = true) }
-item { OutlinedTextField(value = animeKey, onValueChange = { animeKey = it; vm.updateSettings { s -> s.copy(animeSkipClientId = it) } }, label = { Text("AnimeSkip ID") }, singleLine = true) }
-} } }
