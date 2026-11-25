@@ -25,7 +25,6 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.filmr.tv.engine.*
 import com.filmr.tv.model.*
-import com.filmr.tv.viewmodel.FilmrViewModel
 import kotlinx.coroutines.delay
 @OptIn(UnstableApi::class)
 @Composable
@@ -179,6 +178,6 @@ fun CalendarAndSettingsScreen(isCalendar: Boolean, vm: FilmrViewModel, onBack: (
         item { Row(verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = Color.White) }; Text(if (isCalendar) "المكتبة والتقويم" else "الإعدادات", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) } }
 item {
 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { vm.profiles.forEach { p -> FilterChip(selected = vm.activeProfile.collectAsState().value.id == p.id, onClick = { vm.selectProfile(p) }, label = { Text(p.name) }) } }
-OutlinedTextField(value = mdbKey, onValueChange = { mdbKey = it; vm.updateSettings { s -> s.copy(mdbListApiKey = it) } }, label = { Text("MDBList Key") }, singleLine = true)
-OutlinedTextField(value = animeKey, onValueChange = { animeKey = it; vm.updateSettings { s -> s.copy(animeSkipClientId = it) } }, label = { Text("AnimeSkip ID") }, singleLine = true)
+item { OutlinedTextField(value = mdbKey, onValueChange = { mdbKey = it; vm.updateSettings { s -> s.copy(mdbListApiKey = it) } }, label = { Text("MDBList Key") }, singleLine = true) }
+item { OutlinedTextField(value = animeKey, onValueChange = { animeKey = it; vm.updateSettings { s -> s.copy(animeSkipClientId = it) } }, label = { Text("AnimeSkip ID") }, singleLine = true) }
 } } }

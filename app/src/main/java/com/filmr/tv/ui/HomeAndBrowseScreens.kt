@@ -19,7 +19,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
 import com.filmr.tv.model.*
-import com.filmr.tv.viewmodel.FilmrViewModel
 
 @Composable
 fun NuvioHomeScreen(vm: FilmrViewModel, onOpenDetails: (MediaItem) -> Unit, onPlayContinue: (WatchProgressEntity) -> Unit, onOpenSearch: () -> Unit, onOpenAddons: () -> Unit, onOpenCalendar: () -> Unit, onOpenSettings: () -> Unit) {

@@ -18,7 +18,6 @@ import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
 import com.filmr.tv.engine.*
 import com.filmr.tv.model.*
-import com.filmr.tv.viewmodel.FilmrViewModel
 import kotlinx.coroutines.launch
 
 @Composable
