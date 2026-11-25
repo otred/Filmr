@@ -21,7 +21,7 @@ class CloudStreamEngine(private val context: Context) {
     suspend fun parseRepository(repoUrl: String): Result<List<AddonEntity>> = runCatching {
         val repoText = client.get(repoUrl.trim()).bodyAsText()
         val repoJson = gson.fromJson(repoText, JsonObject::class.java)
-        val pluginLists = repoJson.getAsJsonArray("pluginLists") ?: return@runCatching emptyList()
+        val pluginLists = repoJson.getAsJsonArray("pluginLists") ?: return@runCatching emptyList<UnifiedStream>()
 
         val resultAddons = mutableListOf<AddonEntity>()
         for (listEl in pluginLists) {
@@ -72,12 +72,12 @@ class CloudStreamEngine(private val context: Context) {
         season: Int?,
         episode: Int?
     ): List<UnifiedStream> = runCatching {
-        val loader = downloadAndLoadPlugin(addon) ?: return emptyList()
+        val loader = downloadAndLoadPlugin(addon) ?: return emptyList<UnifiedStream>()
         val manifestEntry = runCatching { loader.loadClass("com.lagradost.cloudstream3.plugins.Plugin") }.getOrNull()
         if (manifestEntry != null) {
-            emptyList()
+            emptyList<UnifiedStream>()
         } else {
-            emptyList()
+            emptyList<UnifiedStream>()
         }
-    }.getOrDefault(emptyList())
+    }.getOrDefault(emptyList<UnifiedStream>())
 }

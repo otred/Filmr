@@ -109,7 +109,7 @@ fun DualPlayerScreen(
 
     LaunchedEffect(vlcHolder, fixedSubtitleUri, settings.subtitleOffsetMs, settings.audioDelayMs, settings.audioVolumeBoost, settings.playbackSpeed) {
         val vlc = vlcHolder?.second ?: return@LaunchedEffect
-        fixedSubtitleUri?.let { vlc.addSlave(Media.Slave.Type.Subtitle, it, true) }
+        fixedSubtitleUri?.let { vlc.addSlave(0, it, true) }
         vlc.setSpuDelay(settings.subtitleOffsetMs * 1000L)
         vlc.setAudioDelay(settings.audioDelayMs * 1000L)
         vlc.volume = settings.audioVolumeBoost

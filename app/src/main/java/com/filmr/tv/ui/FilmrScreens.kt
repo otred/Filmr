@@ -189,7 +189,6 @@ private fun HomeCatalogScreen(
                         Text(hero.overview, color = Color.LightGray, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth(0.65f))
                         Button(
                             onClick = { onSelectMedia(hero) },
-                            colors = ButtonDefaults.colors(containerColor = Color(0xFFE50914))
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                             Spacer(Modifier.width(8.dp))
@@ -471,7 +470,6 @@ private fun ProfileAndAccountScreen(
                         OutlinedTextField(value = passInput, onValueChange = { passInput = it }, label = { Text("كلمة المرور") }, modifier = Modifier.fillMaxWidth())
                         Button(
                             onClick = { onLoginStremio(emailInput, passInput) },
-                            colors = ButtonDefaults.colors(containerColor = Color(0xFFE50914))
                         ) { Text("تسجيل الدخول ومزامنة الإضافات", color = Color.White) }
                     }
                 }
@@ -524,7 +522,6 @@ private fun AddonsManagerScreen(
             )
             Button(
                 onClick = { if (urlInput.isNotBlank()) { onInstallUrl(urlInput); urlInput = "" } },
-                colors = ButtonDefaults.colors(containerColor = Color(0xFFE50914))
             ) { Text("تثبيت الإضافة", color = Color.White) }
         }
 
