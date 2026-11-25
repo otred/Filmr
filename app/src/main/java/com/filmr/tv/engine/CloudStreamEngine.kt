@@ -21,7 +21,7 @@ class CloudStreamEngine(private val context: Context) {
     suspend fun parseRepository(repoUrl: String): Result<List<AddonEntity>> = runCatching {
         val repoText = client.get(repoUrl.trim()).bodyAsText()
         val repoJson = gson.fromJson(repoText, JsonObject::class.java)
-        val pluginLists = repoJson.getAsJsonArray("pluginLists") ?: return@runCatching emptyList<UnifiedStream>()
+        val pluginLists = repoJson.getAsJsonArray("pluginLists") ?: return@runCatching emptyList<AddonEntity>()
 
         val resultAddons = mutableListOf<AddonEntity>()
         for (listEl in pluginLists) {
