@@ -181,4 +181,4 @@ item {
 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { vm.profiles.forEach { p -> FilterChip(selected = vm.activeProfile.collectAsState().value.id == p.id, onClick = { vm.selectProfile(p) }, label = { Text(p.name) }) } }
 OutlinedTextField(value = mdbKey, onValueChange = { mdbKey = it; vm.updateSettings { s -> s.copy(mdbListApiKey = it) } }, label = { Text("MDBList Key") }, singleLine = true)
 OutlinedTextField(value = animeKey, onValueChange = { animeKey = it; vm.updateSettings { s -> s.copy(animeSkipClientId = it) } }, label = { Text("AnimeSkip ID") }, singleLine = true)
-} } } }
+} } }
