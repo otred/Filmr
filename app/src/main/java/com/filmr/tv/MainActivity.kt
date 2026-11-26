@@ -1,88 +1,104 @@
 package com.filmr.tv
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.filmr.tv.model.*
-import com.filmr.tv.ui.*
+import com.filmr.tv.domain.model.*
+import com.filmr.tv.ui.FilmrViewModel
+import com.filmr.tv.ui.components.NuvioRightDrawer
+import com.filmr.tv.ui.player.NuvioPlayerScreen
+import com.filmr.tv.ui.screens.*
 
 class MainActivity : ComponentActivity() {
-    private var lastBackPressTime = 0L
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             val vm: FilmrViewModel = viewModel()
+            val isSplash by vm.isInitialLoading.collectAsState()
             val navStack = remember { mutableStateListOf<Any>("home") }
+            var drawerOpen by remember { mutableStateOf(false) }
             val current = navStack.lastOrNull() ?: "home"
 
             BackHandler(enabled = true) {
-                if (navStack.size > 1) {
-                    navStack.removeLastOrNull()
-                } else {
-                    val now = System.currentTimeMillis()
-                    if (now - lastBackPressTime < 2000L) {
-                        finish()
-                    } else {
-                        lastBackPressTime = now
-                        Toast.makeText(this, "اضغط رجوع مرة أخرى للخروج من Filmr", Toast.LENGTH_SHORT).show()
-                    }
+                when {
+                    drawerOpen -> drawerOpen = false
+                    navStack.size > 1 -> navStack.removeLastOrNull()
+                    else -> finishAndRemoveTask()
                 }
             }
 
-            when (current) {
-                "home" -> NuvioHomeScreen(
-                    vm = vm,
-                    onOpenDetails = { navStack.add(it) },
-                    onOpenDetailsManual = { navStack.add(it) },
-                    onResumeContinue = { p, restart ->
-                        val item = MediaItem(p.mediaId, p.imdbId, 0, p.type, p.title, p.title, p.posterUrl, p.backdropUrl)
-                        if (p.streamUrl.isNotBlank() && !restart) {
-                            navStack.add(PlayerRoute(item, UnifiedStream("resume", p.addonName, p.title, p.streamUrl, "HD", 720, p.addonName), p.season, p.episode, p.title, p.positionMs))
-                        } else {
-                            navStack.add(item)
-                        }
-                    },
-                    onOpenSearch = { navStack.add("search") },
-                    onOpenLibrary = { navStack.add("library") },
-                    onOpenCalendar = { navStack.add("calendar") },
-                    onOpenAddons = { navStack.add("addons") },
-                    onOpenSettings = { navStack.add("settings") }
-                )
-                "search" -> SearchScreen(vm, onBack = { navStack.removeLastOrNull() }, onOpenDetails = { navStack.add(it) })
-                "library" -> LibraryScreen(vm, onBack = { navStack.removeLastOrNull() }, onOpenDetails = { navStack.add(it) })
-                "calendar" -> CalendarScreen(vm, onBack = { navStack.removeLastOrNull() }, onOpenDetails = { navStack.add(it) })
-                "addons" -> AddonsAndSyncScreen(vm, onBack = { navStack.removeLastOrNull() })
-                "settings" -> SettingsScreen(vm, onBack = { navStack.removeLastOrNull() }, onOpenAddons = { navStack.add("addons") })
-                is MediaItem -> DetailsAndStreamsScreen(
-                    initialItem = current,
-                    vm = vm,
-                    onBack = { navStack.removeLastOrNull() },
-                    onOpenPerson = { navStack.add(PersonRoute(it)) },
-                    onOpenNetwork = { id, name -> navStack.add(NetworkRoute(id, name)) },
-                    onStartStream = { item, st, s, e, title -> navStack.add(PlayerRoute(item, st, s, e, title, 0L)) }
-                )
-                is PersonRoute -> PersonProfileScreen(current.id, vm, onBack = { navStack.removeLastOrNull() }, onOpenDetails = { navStack.add(it) })
-                is NetworkRoute -> NetworkCatalogScreen(current.id, current.name, vm, onBack = { navStack.removeLastOrNull() }, onOpenDetails = { navStack.add(it) })
-                is PlayerRoute -> FilmrPlayerScreen(
-                    item = current.item,
-                    initialStream = current.stream,
-                    season = current.season,
-                    episode = current.episode,
-                    epTitle = current.title,
-                    startPositionMs = current.posMs,
-                    vm = vm,
-                    onBack = { navStack.removeLastOrNull() }
-                )
+            if (isSplash) {
+                NuvioSplashScreen()
+            } else {
+                Box(Modifier.fillMaxSize()) {
+                    when (current) {
+                        "home" -> NuvioHomeScreen(
+                            vm = vm,
+                            onOpenDetails = { navStack.add(it) },
+                            onResumeContinue = { p ->
+                                val item = MediaItem(p.mediaId, p.imdbId, 0, p.type, p.title, p.title, p.posterUrl, p.backdropUrl)
+                                if (p.streamUrl.isNotBlank()) {
+                                    navStack.add(PlayerRoute(item, UnifiedStream("resume", p.addonName, p.title, p.streamUrl, "HD", 720, p.addonName), p.season, p.episode, p.title, p.positionMs))
+                                } else {
+                                    navStack.add(item)
+                                }
+                            },
+                            onOpenDrawer = { drawerOpen = true }
+                        )
+                        "search" -> NuvioSearchScreen(vm, onOpenDetails = { navStack.add(it) })
+                        "library" -> NuvioLibraryScreen(vm, onOpenDetails = { navStack.add(it) })
+                        "addons" -> NuvioAddonsScreen(vm)
+                        "settings" -> NuvioSettingsScreen(vm)
+                        is MediaItem -> NuvioDetailsScreen(
+                            initialItem = current,
+                            vm = vm,
+                            onStartStream = { item, st, s, e, title ->
+                                navStack.add(PlayerRoute(item, st, s, e, title, 0L))
+                            }
+                        )
+                        is PlayerRoute -> NuvioPlayerScreen(
+                            item = current.item,
+                            initialStream = current.stream,
+                            season = current.season,
+                            episode = current.episode,
+                            epTitle = current.title,
+                            startPositionMs = current.posMs,
+                            vm = vm
+                        )
+                    }
+
+                    if (drawerOpen) {
+                        val activeRoute = (current as? String) ?: "home"
+                        NuvioRightDrawer(
+                            currentRoute = activeRoute,
+                            onSelectRoute = { target ->
+                                if (target == "home") {
+                                    navStack.clear()
+                                    navStack.add("home")
+                                } else {
+                                    navStack.add(target)
+                                }
+                            },
+                            onDismiss = { drawerOpen = false }
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-private data class PersonRoute(val id: Int)
-private data class NetworkRoute(val id: Int, val name: String)
-private data class PlayerRoute(val item: MediaItem, val stream: UnifiedStream, val season: Int, val episode: Int, val title: String, val posMs: Long)
+private data class PlayerRoute(
+    val item: MediaItem,
+    val stream: UnifiedStream,
+    val season: Int,
+    val episode: Int,
+    val title: String,
+    val posMs: Long
+)
