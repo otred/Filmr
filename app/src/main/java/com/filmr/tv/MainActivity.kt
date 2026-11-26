@@ -1,6 +1,7 @@
 package com.filmr.tv
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -10,6 +11,8 @@ import com.filmr.tv.model.*
 import com.filmr.tv.ui.*
 
 class MainActivity : ComponentActivity() {
+    private var lastBackPressTime = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -17,9 +20,18 @@ class MainActivity : ComponentActivity() {
             val navStack = remember { mutableStateListOf<Any>("home") }
             val current = navStack.lastOrNull() ?: "home"
 
-            // منع الخروج من التطبيق عند ضغط زر الرجوع في الريموت
-            BackHandler(enabled = navStack.size > 1) {
-                navStack.removeLastOrNull()
+            BackHandler(enabled = true) {
+                if (navStack.size > 1) {
+                    navStack.removeLastOrNull()
+                } else {
+                    val now = System.currentTimeMillis()
+                    if (now - lastBackPressTime < 2000L) {
+                        finish()
+                    } else {
+                        lastBackPressTime = now
+                        Toast.makeText(this, "اضغط رجوع مرة أخرى للخروج من Filmr", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
 
             when (current) {
