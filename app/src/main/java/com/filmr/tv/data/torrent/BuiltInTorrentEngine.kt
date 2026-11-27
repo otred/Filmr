@@ -10,6 +10,7 @@ import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.SessionParams
 import org.libtorrent4j.SettingsPack
+import org.libtorrent4j.Sha1Hash
 import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
@@ -20,7 +21,6 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.TimeUnit
 
 data class TorrentStreamStatus(
     val isActive: Boolean = false,
@@ -59,7 +59,6 @@ class BuiltInTorrentEngine(private val context: Context) {
             settings_pack.string_types.user_agent.swigValue(),
             "FilmrTV/2.0 libtorrent4j"
         )
-        // Optimize connections & memory for low-end vs high-end TV devices
         val maxConns = if (lowEndMode) 65 else 150
         settings.setInteger(settings_pack.int_types.connections_limit.swigValue(), maxConns)
         settings.setInteger(settings_pack.int_types.active_downloads.swigValue(), 2)
@@ -90,25 +89,28 @@ class BuiltInTorrentEngine(private val context: Context) {
             try {
                 val sm = ensureSession(lowEndMode)
                 val enrichedMagnet = appendPublicTrackers(magnetUri)
+                val sha1 = extractInfoHashSha1(magnetUri)
 
-                // Fetch metadata if needed or add magnet directly
                 val infoBytes = withTimeoutOrNull(25_000L) {
                     sm.fetchMagnet(enrichedMagnet, 25, torrentCacheDir)
                 }
 
+                var targetSha1 = sha1
                 if (infoBytes != null) {
                     val ti = TorrentInfo(infoBytes)
+                    targetSha1 = ti.infoHash()
                     sm.download(ti, torrentCacheDir)
                 } else {
-                    sm.download(enrichedMagnet, torrentCacheDir, TorrentFlags.SEQUENTIAL_DOWNLOAD)
+                    sm.download(enrichedMagnet, torrentCacheDir)
                 }
 
-                // Wait for handle to register
                 var handle: TorrentHandle? = null
-                for (i in 0..30) {
-                    handle = sm.find(extractInfoHashSha1(magnetUri)) ?: sm.torrents().firstOrNull()
-                    if (handle != null && handle.isValid) break
-                    delay(400L)
+                if (targetSha1 != null) {
+                    for (i in 0..35) {
+                        handle = sm.find(targetSha1)
+                        if (handle != null && handle.isValid) break
+                        delay(350L)
+                    }
                 }
 
                 if (handle == null || !handle.isValid) {
@@ -122,7 +124,6 @@ class BuiltInTorrentEngine(private val context: Context) {
                 currentHandle = handle
                 handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
 
-                // Wait until metadata (TorrentInfo) is ready
                 var torrentInfo: TorrentInfo? = handle.torrentFile()
                 var metaWait = 0
                 while ((torrentInfo == null || !torrentInfo.isValid) && metaWait < 60 && isActive) {
@@ -144,7 +145,6 @@ class BuiltInTorrentEngine(private val context: Context) {
                     return@launch
                 }
 
-                // Select target video file (preferredFileIdx or largest video file)
                 val numFiles = torrentInfo.numFiles()
                 val files = torrentInfo.files()
                 val videoExts = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov", ".m4v", ".ts")
@@ -165,13 +165,11 @@ class BuiltInTorrentEngine(private val context: Context) {
                     targetIdx = (0 until numFiles).maxByOrNull { files.fileSize(it) } ?: 0
                 }
 
-                // Set file priorities: ignore unwanted files, TOP_PRIORITY for selected video
                 val priorities = Array(numFiles) { idx ->
                     if (idx == targetIdx) Priority.TOP_PRIORITY else Priority.IGNORE
                 }
                 handle.prioritizeFiles(priorities)
 
-                // Prioritize first and last pieces for instant playback & seeking
                 val firstPiece = torrentInfo.mapFile(targetIdx, 0L, 1).piece()
                 val fileSize = files.fileSize(targetIdx)
                 val lastPiece = torrentInfo.mapFile(targetIdx, (fileSize - 1024L).coerceAtLeast(0L), 1).piece()
@@ -189,10 +187,8 @@ class BuiltInTorrentEngine(private val context: Context) {
                 val targetFile = File(torrentCacheDir, files.filePath(targetIdx))
                 val fileName = targetFile.name
 
-                // Start Local HTTP Range Server
                 val localUrl = startHttpStreamingServer(handle, torrentInfo, targetIdx, targetFile, fileSize)
 
-                // Wait for initial buffer (~2.5 MB or 1.5%) before handing URL to ExoPlayer
                 val minInitialBytes = (2.5 * 1024 * 1024).toLong().coerceAtMost(fileSize / 10 + 512_000L)
                 var readyNotified = false
 
@@ -234,7 +230,7 @@ class BuiltInTorrentEngine(private val context: Context) {
                     }
                     delay(800L)
                 }
-            } catch (e: CancellationException) {
+            } catch (_: CancellationException) {
                 // Normal cancellation
             } catch (e: Exception) {
                 Log.e("FilmrTorrent", "Torrent error", e)
@@ -339,7 +335,6 @@ class BuiltInTorrentEngine(private val context: Context) {
 
             if (requestLine.startsWith("HEAD")) return@withContext
 
-            // Prioritize pieces around requested seek position
             val reqPiece = torrentInfo.mapFile(fileIdx, startByte, 1).piece()
             val totalPieces = torrentInfo.numPieces()
             for (p in reqPiece..(reqPiece + 10).coerceAtMost(totalPieces - 1)) {
@@ -349,7 +344,6 @@ class BuiltInTorrentEngine(private val context: Context) {
                 }
             }
 
-            // Wait for file creation
             var waitCount = 0
             while (!targetFile.exists() && waitCount < 40 && !socket.isClosed) {
                 delay(250L)
@@ -412,19 +406,43 @@ class BuiltInTorrentEngine(private val context: Context) {
                 sessionManager?.stop()
                 sessionManager = null
             }
-            // Clean up old cache files to protect low-storage TV boxes
             runCatching {
                 torrentCacheDir.listFiles()?.forEach { it.deleteRecursively() }
             }
         }
     }
 
-    private fun extractInfoHashSha1(magnet: String): org.libtorrent4j.Sha1Hash? {
+    private fun extractInfoHashSha1(magnet: String): Sha1Hash? {
         return runCatching {
-            val regex = Regex("btih:([a-fA-F0-9]{40})")
-            val match = regex.find(magnet)?.groupValues?.get(1) ?: return null
-            org.libtorrent4j.Sha1Hash(match)
+            val hexMatch = Regex("btih:([a-fA-F0-9]{40})").find(magnet)?.groupValues?.get(1)
+            if (hexMatch != null) return Sha1Hash(hexMatch)
+
+            val b32Match = Regex("btih:([a-zA-Z2-7]{32})").find(magnet)?.groupValues?.get(1)
+            if (b32Match != null) {
+                val hex = base32ToHex(b32Match.uppercase())
+                if (hex.length == 40) return Sha1Hash(hex)
+            }
+            null
         }.getOrNull()
+    }
+
+    private fun base32ToHex(base32: String): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        var buffer = 0
+        var bitsLeft = 0
+        val out = StringBuilder()
+        for (ch in base32) {
+            val valIdx = alphabet.indexOf(ch)
+            if (valIdx < 0) continue
+            buffer = (buffer shl 5) or valIdx
+            bitsLeft += 5
+            if (bitsLeft >= 8) {
+                val byteVal = (buffer shr (bitsLeft - 8)) and 0xFF
+                out.append(String.format("%02x", byteVal))
+                bitsLeft -= 8
+            }
+        }
+        return out.toString()
     }
 
     private fun appendPublicTrackers(magnet: String): String {
