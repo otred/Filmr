@@ -9,283 +9,442 @@ import com.filmr.tv.data.model.*
 import com.filmr.tv.data.remote.CloudStreamRepoService
 import com.filmr.tv.data.remote.StremioAddonService
 import com.filmr.tv.data.remote.TmdbMetadataService
-import kotlinx.coroutines.async
+import com.filmr.tv.data.torrent.BuiltInTorrentEngine
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 
-class FilmrViewModel(app: Application) : AndroidViewModel(app) {
-    private val dao = FilmrDatabase.get(app).dao()
+class FilmrViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val db = FilmrDatabase.getInstance(application)
+    private val dao = db.dao()
+    private val cacheStore = CatalogCacheStore(application)
+
+    private val tmdbService = TmdbMetadataService()
     private val stremioService = StremioAddonService()
     private val cloudStreamService = CloudStreamRepoService()
-    private val tmdbService = TmdbMetadataService()
+    val torrentEngine = BuiltInTorrentEngine(application)
 
-    private val _settings = MutableStateFlow(CatalogCacheStore.loadSettings(app))
+    private val _settings = MutableStateFlow(cacheStore.loadSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    val addons = dao.observeAddons().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    val watchProgress = dao.observeProgress().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    val watchHistory = dao.observeHistory().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    val searchHistory = dao.observeSearchHistory().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _stremioAccount = MutableStateFlow(cacheStore.loadStremioAccount())
+    val stremioAccount: StateFlow<StremioAccountState> = _stremioAccount.asStateFlow()
 
-    val libraryEntities = dao.observeLibrary().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    val library = combine(dao.observeLibrary(), _settings) { list, s ->
-        list.map {
-            MediaItem(
-                id = it.id,
-                imdbId = it.imdbId,
-                tmdbId = it.tmdbId,
-                type = it.type,
-                titleAr = it.titleAr,
-                titleEn = it.titleEn,
-                posterUrl = it.posterUrl,
-                backdropUrl = it.backdropUrl,
-                rating = it.rating,
-                year = it.year,
-                useEnglishTitle = s.preferEnglishTitles
-            )
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _catalogRows = MutableStateFlow(cacheStore.loadCatalogRows())
+    val catalogRows: StateFlow<List<AddonCatalogRow>> = _catalogRows.asStateFlow()
 
-    private val _addonCatalogRows = MutableStateFlow(CatalogCacheStore.loadCatalogRows(app))
-    private val _isInitialLoading = MutableStateFlow(_addonCatalogRows.value.isEmpty())
-    val isInitialLoading: StateFlow<Boolean> = _isInitialLoading.asStateFlow()
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    val catalogRows = combine(_addonCatalogRows, _settings) { rows, s ->
-        rows.map { r ->
-            r.copy(items = r.items.map { it.copy(useEnglishTitle = s.preferEnglishTitles) })
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), _addonCatalogRows.value)
+    private val _statusBanner = MutableStateFlow<String?>(null)
+    val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
-    private val _focusedHeroItem = MutableStateFlow<MediaItem?>(
-        _addonCatalogRows.value.firstOrNull()?.items?.firstOrNull()
-    )
-    val focusedHeroItem: StateFlow<MediaItem?> = _focusedHeroItem.asStateFlow()
+    // Streams & Subtitles for Active Details / Player
+    private val _streams = MutableStateFlow<List<UnifiedStream>>(emptyList())
+    val streams: StateFlow<List<UnifiedStream>> = _streams.asStateFlow()
 
-    private val _addonStatusMsg = MutableStateFlow("")
-    val addonStatusMsg: StateFlow<String> = _addonStatusMsg.asStateFlow()
+    private val _isLoadingStreams = MutableStateFlow(false)
+    val isLoadingStreams: StateFlow<Boolean> = _isLoadingStreams.asStateFlow()
+
+    private val _subtitles = MutableStateFlow<List<SubtitleTrack>>(emptyList())
+    val subtitles: StateFlow<List<SubtitleTrack>> = _subtitles.asStateFlow()
+
+    // Search State
+    private val _searchResults = MutableStateFlow<List<MediaItem>>(emptyList())
+    val searchResults: StateFlow<List<MediaItem>> = _searchResults.asStateFlow()
+
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    // Room Flows
+    val allAddons: StateFlow<List<AddonEntity>> = dao.observeAllAddons()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val continueWatching: StateFlow<List<WatchProgressEntity>> = dao.observeContinueWatching()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val watchHistory: StateFlow<List<WatchHistoryEntity>> = dao.observeWatchHistory()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val libraryItems: StateFlow<List<LibraryEntity>> = dao.observeLibrary()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val searchHistory: StateFlow<List<SearchHistoryEntity>> = dao.observeSearchHistory()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         viewModelScope.launch {
-            if (dao.getEnabledAddons().isEmpty()) {
-                dao.upsertAddon(AddonEntity(
-                    id = "com.linvo.cinemeta",
-                    name = "Cinemeta",
-                    description = "الفهرس الرسمي للأفلام والمسلسلات",
-                    manifestUrl = "https://v3-cinemeta.strem.io/manifest.json",
-                    type = "stremio",
-                    isEnabled = true,
-                    orderIndex = 0
-                ))
-                dao.upsertAddon(AddonEntity(
-                    id = "org.stremio.opensubtitlesv3",
-                    name = "OpenSubtitles v3",
-                    description = "ترجمات عربية وعالمية تلقائية",
-                    manifestUrl = "https://opensubtitles-v3.strem.io/manifest.json",
-                    type = "stremio",
-                    isEnabled = true,
-                    orderIndex = 1
-                ))
+            ensureDefaultAddons()
+            // Fast background Stremio account auto-sync if logged in
+            val acc = _stremioAccount.value
+            if (acc.isLoggedIn && acc.authKey.isNotBlank()) {
+                syncStremioAccountSilently(acc)
             }
             refreshCatalogs()
         }
     }
 
-    fun setFocusedHeroItem(item: MediaItem) {
-        if (_focusedHeroItem.value?.id != item.id) {
-            _focusedHeroItem.value = item
+    private suspend fun ensureDefaultAddons() {
+        val existing = dao.getEnabledAddons()
+        if (existing.isEmpty()) {
+            val defaults = listOf(
+                "https://v3-cinemeta.strem.io/manifest.json",
+                "https://opensubtitles-v3.strem.io/manifest.json"
+            )
+            defaults.forEachIndexed { idx, url ->
+                stremioService.installAddonFromUrl(url, isFromAccount = false, orderIndex = idx)?.let {
+                    dao.upsertAddon(it)
+                }
+            }
         }
     }
 
-    fun refreshCatalogs() {
-        viewModelScope.launch {
-            val enabled = dao.getEnabledAddons()
-            val s = _settings.value
-            val addonDeferred = async { stremioService.fetchAllAddonCatalogs(enabled) }
-            val tmdbMoviesDeferred = async {
-                if (s.tmdbEnabled) tmdbService.getTrending("movie", s.tmdbApiKey, s.tmdbLanguage) else emptyList()
-            }
-            val tmdbSeriesDeferred = async {
-                if (s.tmdbEnabled) tmdbService.getTrending("series", s.tmdbApiKey, s.tmdbLanguage) else emptyList()
-            }
-
-            val addonRows = addonDeferred.await()
-            val tmdbMovies = tmdbMoviesDeferred.await()
-            val tmdbSeries = tmdbSeriesDeferred.await()
-
-            val merged = mutableListOf<AddonCatalogRow>()
-            if (tmdbMovies.isNotEmpty()) {
-                merged.add(AddonCatalogRow("tmdb_trending_m", "TMDB", "trending_m", "الأفلام الرائجة عالمياً", "ar", tmdbMovies))
-            }
-            if (tmdbSeries.isNotEmpty()) {
-                merged.add(AddonCatalogRow("tmdb_trending_s", "TMDB", "trending_s", "المسلسلات الرائجة عالمياً", "ar", tmdbSeries))
-            }
-            merged.addAll(addonRows)
-
-            if (merged.isNotEmpty()) {
-                _addonCatalogRows.value = merged
-                CatalogCacheStore.saveCatalogRows(getApplication(), merged)
-                if (_focusedHeroItem.value == null) {
-                    _focusedHeroItem.value = merged.firstOrNull()?.items?.firstOrNull()
-                }
-            }
-            _isInitialLoading.value = false
-        }
+    fun clearStatusBanner() {
+        _statusBanner.value = null
     }
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         val updated = transform(_settings.value)
         _settings.value = updated
-        CatalogCacheStore.saveSettings(getApplication(), updated)
+        cacheStore.saveSettings(updated)
     }
 
-    fun addStremioAddon(rawUrl: String) {
+    fun refreshCatalogs() {
         viewModelScope.launch {
-            _addonStatusMsg.value = "جاري جلب بيانات الإضافة..."
-            val entity = stremioService.fetchManifest(rawUrl)
-            if (entity != null) {
-                dao.upsertAddon(entity)
-                _addonStatusMsg.value = "تم تثبيت ${entity.name} بنجاح"
+            _isRefreshing.value = true
+            try {
+                val currentSettings = _settings.value
+                val tmdbDeferred = async { tmdbService.fetchHomeCatalogs(currentSettings) }
+
+                val stremioAddons = dao.getEnabledAddonsByType("stremio")
+                    .take(currentSettings.maxConcurrentAddons)
+
+                val addonDeferreds = stremioAddons.map { addon ->
+                    async {
+                        withTimeoutOrNull(8_000L) {
+                            stremioService.fetchAddonCatalogs(addon)
+                        } ?: emptyList()
+                    }
+                }
+
+                val tmdbRows = tmdbDeferred.await()
+                val addonRows = addonDeferreds.awaitAll().flatten()
+                val combined = (tmdbRows + addonRows).distinctBy { it.id }
+
+                if (combined.isNotEmpty()) {
+                    _catalogRows.value = combined
+                    cacheStore.saveCatalogRows(combined)
+                }
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
+    }
+
+    /**
+     * Stremio Account Login & Fast Sync (Addons + Library + Continue Watching + Watched)
+     */
+    fun loginAndSyncStremio(email: String, password: String, onComplete: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            val result = stremioService.loginAndSyncStremioAccount(email, password)
+            result.onSuccess { syncData ->
+                applyStremioSyncData(syncData)
                 refreshCatalogs()
+                val msg = "تمت المزامنة بنجاح: ${syncData.addons.size} إضافة و ${syncData.libraryItems.size} عنصر بالمكتبة"
+                _statusBanner.value = msg
+                onComplete(true, msg)
+            }.onFailure { err ->
+                val msg = err.localizedMessage ?: "فشل تسجيل الدخول"
+                _statusBanner.value = msg
+                onComplete(false, msg)
+            }
+            _isRefreshing.value = false
+        }
+    }
+
+    fun syncNowStremioAccount() {
+        val acc = _stremioAccount.value
+        if (!acc.isLoggedIn || acc.authKey.isBlank()) return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            val res = stremioService.syncWithAuthKey(acc.authKey, acc.email, acc.userId)
+            res.onSuccess { syncData ->
+                applyStremioSyncData(syncData)
+                refreshCatalogs()
+                _statusBanner.value = "تم تحديث المزامنة السريعة (${syncData.addons.size} إضافة • ${syncData.libraryItems.size} بالمكتبة)"
+            }.onFailure {
+                _statusBanner.value = "تعذر تحديث المزامنة حالياً"
+            }
+            _isRefreshing.value = false
+        }
+    }
+
+    private suspend fun syncStremioAccountSilently(acc: StremioAccountState) {
+        val res = stremioService.syncWithAuthKey(acc.authKey, acc.email, acc.userId)
+        res.onSuccess { syncData ->
+            applyStremioSyncData(syncData)
+        }
+    }
+
+    private suspend fun applyStremioSyncData(syncData: com.filmr.tv.data.remote.StremioSyncResult) {
+        _stremioAccount.value = syncData.account
+        cacheStore.saveStremioAccount(syncData.account)
+
+        if (syncData.addons.isNotEmpty()) {
+            dao.clearSyncedStremioAddons()
+            dao.upsertAddons(syncData.addons)
+        }
+        if (syncData.libraryItems.isNotEmpty()) {
+            dao.upsertLibraryItems(syncData.libraryItems)
+        }
+        if (syncData.progressItems.isNotEmpty()) {
+            dao.upsertAllProgress(syncData.progressItems)
+        }
+        syncData.watchedItems.forEach { dao.markWatched(it) }
+    }
+
+    fun logoutStremioAccount() {
+        viewModelScope.launch {
+            dao.clearSyncedStremioAddons()
+            val cleared = StremioAccountState()
+            _stremioAccount.value = cleared
+            cacheStore.saveStremioAccount(cleared)
+            _statusBanner.value = "تم تسجيل الخروج من حساب Stremio"
+        }
+    }
+
+    /**
+     * Manual Stremio Addon Installation
+     */
+    fun installStremioAddon(url: String, onDone: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val addon = stremioService.installAddonFromUrl(url, isFromAccount = false)
+            if (addon != null) {
+                dao.upsertAddon(addon)
+                refreshCatalogs()
+                onDone(true, "تم تثبيت إضافة Stremio: ${addon.name}")
             } else {
-                _addonStatusMsg.value = "تعذر الاتصال برابط الإضافة"
+                onDone(false, "تعذر قراءة ملف manifest.json من الرابط")
             }
         }
     }
 
-    fun importCloudStreamRepo(rawUrl: String) {
+    /**
+     * Manual CloudStream Repository / Plugin Installation (Completely Separate from Stremio)
+     */
+    fun installCloudStreamRepo(url: String, onDone: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            _addonStatusMsg.value = "جاري استيراد مستودع CloudStream..."
-            val plugins = cloudStreamService.importRepository(rawUrl)
+            val plugins = cloudStreamService.installCloudStreamRepo(url)
             if (plugins.isNotEmpty()) {
-                plugins.forEach { dao.upsertAddon(it) }
-                _addonStatusMsg.value = "تم تثبيت ${plugins.size} إضافة من المستودع"
+                dao.upsertAddons(plugins)
+                onDone(true, "تم تثبيت ${plugins.size} إضافة من مستودع CloudStream")
             } else {
-                _addonStatusMsg.value = "لم يتم العثور على إضافات في الرابط"
+                onDone(false, "تعذر العثور على إضافات صالحة في رابط CloudStream")
             }
         }
     }
 
-    fun toggleAddon(addon: AddonEntity) {
+    fun toggleAddon(id: String, enabled: Boolean) {
         viewModelScope.launch {
-            dao.upsertAddon(addon.copy(isEnabled = !addon.isEnabled))
-            refreshCatalogs()
+            dao.setAddonEnabled(id, enabled)
         }
     }
 
-    fun deleteAddon(id: String) {
+    fun removeAddon(id: String) {
         viewModelScope.launch {
             dao.deleteAddon(id)
-            refreshCatalogs()
         }
     }
 
     suspend fun enrichDetails(item: MediaItem): MediaItem {
-        return tmdbService.enrichDetails(item, _settings.value)
+        return tmdbService.enrichMediaDetails(item, _settings.value)
     }
 
-    suspend fun getSeasonEpisodes(tmdbId: Int, season: Int): List<EpisodeItem> {
-        val s = _settings.value
-        return tmdbService.getSeasonEpisodes(tmdbId, season, s.tmdbApiKey, s.tmdbLanguage)
+    suspend fun loadSeasonEpisodes(tmdbId: Int, season: Int, seriesId: String): List<EpisodeItem> {
+        return tmdbService.fetchSeasonEpisodes(tmdbId, season, seriesId, _settings.value)
     }
 
-    suspend fun getPersonDetails(personId: Int): PersonDetails? {
-        val s = _settings.value
-        return tmdbService.getPersonDetails(personId, s.tmdbApiKey, s.tmdbLanguage)
+    suspend fun loadPersonDetails(personId: Int): PersonDetails? {
+        return tmdbService.fetchPersonDetails(personId, _settings.value)
     }
 
-    suspend fun discoverByCompanyOrNetwork(id: Int, isNetwork: Boolean, sortBy: String): List<MediaItem> {
-        val s = _settings.value
-        return tmdbService.discoverByCompanyOrNetwork(id, isNetwork, sortBy, s.tmdbApiKey, s.tmdbLanguage)
+    suspend fun discoverCompany(id: Int, isNetwork: Boolean, sortBy: String): List<MediaItem> {
+        return tmdbService.discoverByCompanyOrNetwork(id, isNetwork, sortBy, _settings.value)
     }
 
-    suspend fun searchAll(query: String): List<AddonCatalogRow> {
-        if (query.isBlank()) return emptyList()
-        dao.upsertSearchQuery(SearchHistoryEntity(query.trim()))
-        val s = _settings.value
-        val enabled = dao.getEnabledAddons()
-        val tmdbRes = if (s.tmdbEnabled) tmdbService.searchMulti(query, s.tmdbApiKey, s.tmdbLanguage) else emptyList()
-        val addonRes = stremioService.searchAcrossAddons(enabled, query)
-        val rows = mutableListOf<AddonCatalogRow>()
-        if (tmdbRes.isNotEmpty()) {
-            rows.add(AddonCatalogRow("tmdb_search", "TMDB", "search", "نتائج البحث الفوري", "ar", tmdbRes))
-        }
-        rows.addAll(addonRes)
-        return rows
-    }
-
-    suspend fun fetchUnifiedStreams(item: MediaItem, season: Int, episode: Int): List<UnifiedStream> {
-        val enabled = dao.getEnabledAddons()
-        val stremioStreams = stremioService.fetchStreams(enabled, item, season, episode)
-        val csStreams = cloudStreamService.fetchStreamsFromPlugins(enabled, item, season, episode)
-        return (stremioStreams + csStreams).sortedByDescending { it.qualityScore }
-    }
-
-    suspend fun fetchSubtitles(item: MediaItem, season: Int, episode: Int): List<SubtitleTrack> {
-        val enabled = dao.getEnabledAddons()
-        return stremioService.fetchSubtitles(enabled, item, season, episode)
-    }
-
-    fun toggleLibrary(item: MediaItem) {
+    /**
+     * Unified Stream & Subtitle Loader:
+     * Queries BOTH enabled Stremio addons AND enabled CloudStream plugins in parallel,
+     * merging all servers into one Nuvio-style categorized list!
+     */
+    fun loadStreamsAndSubtitles(media: MediaItem, season: Int? = null, episode: Int? = null) {
         viewModelScope.launch {
-            val exists = dao.getAllLibrary().any { it.id == item.id }
+            _isLoadingStreams.value = true
+            _streams.value = emptyList()
+            _subtitles.value = emptyList()
+
+            try {
+                val baseId = media.imdbId ?: media.id
+                val streamId = if (season != null && episode != null) "$baseId:$season:$episode" else baseId
+                val stremioAddons = dao.getEnabledAddonsByType("stremio")
+                val cloudPlugins = dao.getEnabledAddonsByType("cloudstream")
+
+                val stremioStreamJobs = stremioAddons.map { addon ->
+                    async {
+                        withTimeoutOrNull(10_000L) {
+                            stremioService.fetchStreamsForAddon(addon, media.type, streamId)
+                        } ?: emptyList()
+                    }
+                }
+
+                val cloudStreamJobs = cloudPlugins.map { plugin ->
+                    async {
+                        withTimeoutOrNull(10_000L) {
+                            cloudStreamService.fetchStreamsForCloudStreamPlugin(plugin, media, season, episode)
+                        } ?: emptyList()
+                    }
+                }
+
+                val subtitleJobs = stremioAddons.map { addon ->
+                    async {
+                        withTimeoutOrNull(8_000L) {
+                            stremioService.fetchSubtitlesForAddon(addon, media.type, streamId)
+                        } ?: emptyList()
+                    }
+                }
+
+                val mergedStreams = (stremioStreamJobs.awaitAll().flatten() + cloudStreamJobs.awaitAll().flatten())
+                val embeddedSubs = mergedStreams.flatMap { it.subtitles }
+                val externalSubs = subtitleJobs.awaitAll().flatten()
+
+                _streams.value = mergedStreams
+                _subtitles.value = (embeddedSubs + externalSubs).distinctBy { it.url }
+            } finally {
+                _isLoadingStreams.value = false
+            }
+        }
+    }
+
+    fun searchMedia(query: String) {
+        if (query.isBlank()) {
+            _searchResults.value = emptyList()
+            return
+        }
+        viewModelScope.launch {
+            _isSearching.value = true
+            try {
+                dao.saveSearchQuery(SearchHistoryEntity(query.trim()))
+                val tmdbDeferred = async { tmdbService.searchMulti(query, _settings.value) }
+                val stremioAddons = dao.getEnabledAddonsByType("stremio").take(4)
+                val addonJobs = stremioAddons.map { addon ->
+                    async {
+                        withTimeoutOrNull(6_000L) {
+                            stremioService.searchInAddon(addon, query)
+                        } ?: emptyList()
+                    }
+                }
+                val results = (tmdbDeferred.await() + addonJobs.awaitAll().flatten())
+                    .distinctBy { it.imdbId ?: "${it.type}_${it.titleEn.lowercase()}_${it.year}" }
+                _searchResults.value = results
+            } finally {
+                _isSearching.value = false
+            }
+        }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch {
+            dao.clearSearchHistory()
+        }
+    }
+
+    fun toggleLibrary(media: MediaItem) {
+        viewModelScope.launch {
+            val exists = libraryItems.value.any { it.mediaId == media.id }
             if (exists) {
-                dao.deleteLibraryItem(item.id)
+                dao.removeFromLibrary(media.id)
             } else {
-                dao.upsertLibraryItem(LibraryEntity(
-                    id = item.id,
-                    imdbId = item.imdbId,
-                    tmdbId = item.tmdbId,
-                    type = item.type,
-                    titleAr = item.titleAr,
-                    titleEn = item.titleEn,
-                    posterUrl = item.posterUrl,
-                    backdropUrl = item.backdropUrl,
-                    rating = item.rating,
-                    year = item.year
-                ))
+                dao.addToLibrary(
+                    LibraryEntity(
+                        mediaId = media.id,
+                        imdbId = media.imdbId,
+                        mediaType = media.type,
+                        titleAr = media.titleAr,
+                        titleEn = media.titleEn,
+                        posterUrl = media.posterUrl,
+                        backdropUrl = media.backdropUrl,
+                        year = media.year,
+                        rating = media.imdbRating ?: media.tmdbRating
+                    )
+                )
+            }
+        }
+    }
+
+    fun toggleWatched(media: MediaItem) {
+        viewModelScope.launch {
+            val exists = watchHistory.value.any { it.mediaId == media.id }
+            if (exists) {
+                dao.unmarkWatched(media.id)
+            } else {
+                dao.markWatched(
+                    WatchHistoryEntity(
+                        mediaId = media.id,
+                        mediaType = media.type,
+                        title = media.displayTitle(_settings.value.preferEnglishTitles),
+                        posterUrl = media.posterUrl
+                    )
+                )
             }
         }
     }
 
     fun saveWatchProgress(
-        item: MediaItem,
+        media: MediaItem,
         season: Int,
         episode: Int,
+        episodeTitle: String,
         positionMs: Long,
-        durationMs: Long,
-        streamUrl: String,
-        addonName: String
+        durationMs: Long
     ) {
-        if (durationMs <= 0L) return
+        if (durationMs <= 0L || positionMs < 5_000L) return
         viewModelScope.launch {
-            val key = if (item.type == "series") "${item.id}_s${season}_e$episode" else item.id
-            dao.upsertProgress(WatchProgressEntity(
-                key = key,
-                mediaId = item.id,
-                imdbId = item.imdbId,
-                type = item.type,
-                title = item.displayTitle,
-                posterUrl = item.displayPoster,
-                backdropUrl = item.displayBackdrop,
-                season = season,
-                episode = episode,
-                positionMs = positionMs,
-                durationMs = durationMs,
-                streamUrl = streamUrl,
-                addonName = addonName
-            ))
+            val key = if (season > 0 && episode > 0) "${media.id}:$season:$episode" else media.id
+            val fraction = positionMs.toFloat() / durationMs.toFloat()
+            if (fraction >= 0.92f) {
+                dao.removeProgress(key)
+                dao.markWatched(
+                    WatchHistoryEntity(
+                        mediaId = media.id,
+                        mediaType = media.type,
+                        title = media.displayTitle(_settings.value.preferEnglishTitles),
+                        posterUrl = media.posterUrl
+                    )
+                )
+            } else {
+                dao.upsertProgress(
+                    WatchProgressEntity(
+                        key = key,
+                        mediaId = media.id,
+                        imdbId = media.imdbId,
+                        mediaType = media.type,
+                        title = media.displayTitle(_settings.value.preferEnglishTitles),
+                        posterUrl = media.posterUrl,
+                        backdropUrl = media.backdropUrl,
+                        season = season,
+                        episode = episode,
+                        episodeTitle = episodeTitle,
+                        positionMs = positionMs,
+                        durationMs = durationMs
+                    )
+                )
+            }
         }
     }
 
-    fun markAsWatched(item: MediaItem) {
-        viewModelScope.launch {
-            dao.upsertHistory(WatchHistoryEntity(
-                key = item.id,
-                mediaId = item.id,
-                title = item.displayTitle,
-                posterUrl = item.displayPoster,
-                type = item.type
-            ))
-        }
+    override fun onCleared() {
+        torrentEngine.stopCurrentStream(keepSession = false)
+        super.onCleared()
     }
 }

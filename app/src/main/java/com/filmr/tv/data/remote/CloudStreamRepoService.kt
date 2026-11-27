@@ -1,105 +1,197 @@
 package com.filmr.tv.data.remote
 
-import com.filmr.tv.data.model.*
-import kotlinx.coroutines.*
+import com.filmr.tv.data.model.AddonEntity
+import com.filmr.tv.data.model.MediaItem
+import com.filmr.tv.data.model.UnifiedStream
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
-import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class CloudStreamRepoService {
+
     private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .followRedirects(true)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    private fun fetchText(url: String): String? = try {
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 13; Android TV) AppleWebKit/537.36")
-            .build()
-        client.newCall(req).execute().use { res ->
-            if (!res.isSuccessful) return null
-            res.body?.string()
-        }
-    } catch (_: Exception) { null }
+    private suspend fun fetchJsonElement(url: String): JsonElement? = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = Request.Builder()
+                .url(url.trim())
+                .header("User-Agent", "CloudStream/3.4.0 (FilmrTV)")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val body = resp.body?.string() ?: return@use null
+                JsonParser.parseString(body)
+            }
+        }.getOrNull()
+    }
 
-    suspend fun importRepository(rawRepoUrl: String): List<AddonEntity> = withContext(Dispatchers.IO) {
-        val cleanUrl = rawRepoUrl.trim().split("\s+".toRegex()).firstOrNull() ?: return@withContext emptyList()
-        val body = fetchText(cleanUrl) ?: return@withContext emptyList()
-        val result = mutableListOf<AddonEntity>()
-        try {
-            if (body.trimStart().startsWith("[")) {
-                parsePluginArray(JSONArray(body), cleanUrl, result, "CloudStream")
+    /**
+     * Installs CloudStream repositories (repo.json containing pluginLists) or direct plugins.json arrays
+     * Completely separated from Stremio addons (`sourceType = "cloudstream"`).
+     */
+    suspend fun installCloudStreamRepo(repoUrl: String, baseOrder: Int = 100): List<AddonEntity> {
+        val cleanUrl = repoUrl.trim()
+        val rootEl = fetchJsonElement(cleanUrl) ?: return emptyList()
+        val installed = mutableListOf<AddonEntity>()
+
+        if (rootEl.isJsonObject) {
+            val obj = rootEl.asJsonObject
+            val repoName = obj.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "CloudStream Repo"
+            val pluginLists = obj.getAsJsonArray("pluginLists")
+            if (pluginLists != null && pluginLists.size() > 0) {
+                pluginLists.forEach { listUrlEl ->
+                    val listUrl = listUrlEl.asString
+                    val pluginsEl = fetchJsonElement(listUrl)
+                    if (pluginsEl != null && pluginsEl.isJsonArray) {
+                        installed.addAll(parsePluginsArray(pluginsEl.asJsonArray, listUrl, repoName, baseOrder + installed.size))
+                    }
+                }
+            } else if (obj.has("url") && obj.has("name")) {
+                parseSinglePlugin(obj, cleanUrl, repoName, baseOrder)?.let { installed.add(it) }
+            }
+        } else if (rootEl.isJsonArray) {
+            installed.addAll(parsePluginsArray(rootEl.asJsonArray, cleanUrl, "CloudStream", baseOrder))
+        }
+
+        return installed
+    }
+
+    private fun parsePluginsArray(
+        arr: com.google.gson.JsonArray,
+        sourceUrl: String,
+        repoName: String,
+        startOrder: Int
+    ): List<AddonEntity> {
+        val list = mutableListOf<AddonEntity>()
+        arr.forEachIndexed { idx, el ->
+            if (el.isJsonObject) {
+                parseSinglePlugin(el.asJsonObject, sourceUrl, repoName, startOrder + idx)?.let {
+                    list.add(it)
+                }
+            }
+        }
+        return list
+    }
+
+    private fun parseSinglePlugin(
+        obj: JsonObject,
+        sourceUrl: String,
+        repoName: String,
+        orderIndex: Int
+    ): AddonEntity? {
+        val internalName = obj.get("internalName")?.takeIf { !it.isJsonNull }?.asString
+            ?: obj.get("name")?.takeIf { !it.isJsonNull }?.asString
+            ?: return null
+        val displayName = obj.get("name")?.takeIf { !it.isJsonNull }?.asString ?: internalName
+        val desc = obj.get("description")?.takeIf { !it.isJsonNull }?.asString
+            ?: "إضافة CloudStream ($repoName)"
+        val pluginUrl = obj.get("url")?.takeIf { !it.isJsonNull }?.asString ?: sourceUrl
+        val icon = obj.get("iconUrl")?.takeIf { !it.isJsonNull }?.asString
+            ?.replace("%size%", "128")
+        val version = obj.get("version")?.takeIf { !it.isJsonNull }?.asString ?: "1.0"
+        val status = obj.get("status")?.takeIf { !it.isJsonNull }?.asInt ?: 1
+        if (status == 0) return null // Disabled/broken plugin in repo
+
+        return AddonEntity(
+            id = "cs_${internalName.lowercase().replace("[^a-z0-9_]".toRegex(), "_")}",
+            name = displayName,
+            description = desc,
+            manifestUrl = sourceUrl,
+            transportUrl = pluginUrl,
+            version = version,
+            iconUrl = icon,
+            sourceType = "cloudstream",
+            isFromStremioAccount = false,
+            enabled = true,
+            orderIndex = orderIndex,
+            rawManifestJson = obj.toString()
+        )
+    }
+
+    /**
+     * Queries enabled CloudStream extensions and extracts streams / direct mirrors / torrent links
+     * to merge cleanly inside the Nuvio-style Unified Server Picker alongside Stremio streams!
+     */
+    suspend fun fetchStreamsForCloudStreamPlugin(
+        plugin: AddonEntity,
+        media: MediaItem,
+        season: Int? = null,
+        episode: Int? = null
+    ): List<UnifiedStream> = withContext(Dispatchers.IO) {
+        val streams = mutableListOf<UnifiedStream>()
+        val queryTitle = media.titleEn.ifBlank { media.titleAr }
+        val encodedQuery = URLEncoder.encode(queryTitle, "UTF-8")
+
+        // 1. Check if plugin exposes a compatible Stremio/JSON bridge or direct site API
+        val rawMeta = runCatching { JsonParser.parseString(plugin.rawManifestJson).asJsonObject }.getOrNull()
+        val apiUrl = rawMeta?.get("apiUrl")?.takeIf { !it.isJsonNull }?.asString
+            ?: rawMeta?.get("repositoryUrl")?.takeIf { !it.isJsonNull }?.asString
+
+        if (!apiUrl.isNullOrBlank() && apiUrl.startsWith("http")) {
+            val probeUrl = if (season != null && episode != null) {
+                "${apiUrl.trimEnd('/')}/stream/series/${media.imdbId ?: media.id}:$season:$episode.json"
             } else {
-                val repo = JSONObject(body)
-                val repoName = repo.optString("name", "مستودع CloudStream")
-                val pluginLists = repo.optJSONArray("pluginLists")
-                if (pluginLists != null) {
-                    for (i in 0 until pluginLists.length()) {
-                        val pUrl = pluginLists.getString(i)
-                        val pBody = fetchText(pUrl) ?: continue
-                        if (pBody.trimStart().startsWith("[")) {
-                            parsePluginArray(JSONArray(pBody), cleanUrl, result, repoName)
-                        }
+                "${apiUrl.trimEnd('/')}/stream/movie/${media.imdbId ?: media.id}.json"
+            }
+            val resp = fetchJsonElement(probeUrl)
+            if (resp != null && resp.isJsonObject) {
+                resp.asJsonObject.getAsJsonArray("streams")?.forEachIndexed { idx, sEl ->
+                    val so = sEl.asJsonObject
+                    val u = so.get("url")?.takeIf { !it.isJsonNull }?.asString
+                    val hash = so.get("infoHash")?.takeIf { !it.isJsonNull }?.asString
+                    if (!u.isNullOrBlank() || !hash.isNullOrBlank()) {
+                        val isTor = !hash.isNullOrBlank() || (u?.startsWith("magnet:") == true)
+                        streams.add(
+                            UnifiedStream(
+                                id = "${plugin.id}_cs_$idx",
+                                title = so.get("name")?.asString ?: plugin.name,
+                                description = so.get("title")?.asString ?: "$queryTitle • CloudStream",
+                                url = u ?: "magnet:?xt=urn:btih:$hash",
+                                infoHash = hash,
+                                quality = "1080p",
+                                isTorrent = isTor,
+                                sourceEngine = "cloudstream",
+                                addonName = plugin.name,
+                                addonUrl = plugin.transportUrl
+                            )
+                        )
                     }
                 }
             }
-        } catch (_: Exception) {}
-        result
-    }
+        }
 
-    private fun parsePluginArray(arr: JSONArray, repoUrl: String, out: MutableList<AddonEntity>, repoName: String) {
-        for (i in 0 until arr.length()) {
-            val p = arr.optJSONObject(i) ?: continue
-            val name = p.optString("name").ifBlank { p.optString("internalName") }
-            val url = p.optString("url")
-            val status = p.optInt("status", 1)
-            if (name.isNotBlank() && status != 0) {
-                val desc = p.optString("description").ifBlank { "إضافة من $repoName" }
-                out.add(AddonEntity(
-                    id = "cs_${name.lowercase().replace("[^a-z0-9]".toRegex(), "_")}",
-                    name = name,
-                    description = desc,
-                    repoUrl = repoUrl,
-                    manifestUrl = url,
-                    logoUrl = p.optString("iconUrl"),
-                    type = "cloudstream",
-                    isEnabled = true,
-                    orderIndex = i
-                ))
+        // 2. Provide direct CloudStream provider search/stream entry if no direct JSON endpoint was exposed
+        if (streams.isEmpty()) {
+            val epTag = if (season != null && episode != null) " S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}" else ""
+            val searchTarget = if (!apiUrl.isNullOrBlank() && apiUrl.startsWith("http")) {
+                "${apiUrl.trimEnd('/')}/?s=$encodedQuery"
+            } else {
+                "https://www.google.com/search?q=${URLEncoder.encode("${plugin.name} $queryTitle$epTag watch online", "UTF-8")}"
             }
+            streams.add(
+                UnifiedStream(
+                    id = "${plugin.id}_cs_provider",
+                    title = "${plugin.name} (CloudStream)",
+                    description = "بحث وتشغيل عبر مزود CloudStream: $queryTitle$epTag",
+                    url = searchTarget,
+                    quality = "HD / Multi",
+                    isTorrent = false,
+                    sourceEngine = "cloudstream",
+                    addonName = plugin.name,
+                    addonUrl = plugin.transportUrl
+                )
+            )
         }
-    }
 
-    suspend fun fetchStreamsFromPlugins(
-        plugins: List<AddonEntity>,
-        item: MediaItem,
-        season: Int,
-        episode: Int
-    ): List<UnifiedStream> = withContext(Dispatchers.IO) {
-        val enabled = plugins.filter { it.isEnabled && it.type == "cloudstream" }
-        if (enabled.isEmpty()) return@withContext emptyList()
-
-        val qAr = URLEncoder.encode(item.titleAr.ifBlank { item.titleEn }, "UTF-8")
-        val out = mutableListOf<UnifiedStream>()
-
-        enabled.take(4).forEachIndexed { idx, plugin ->
-            val searchUrl = "https://www.google.com/search?q=${qAr}+${if (item.type == "series") "الحلقة+$episode" else "مترجم"}+${URLEncoder.encode(plugin.name, "UTF-8")}"
-            out.add(UnifiedStream(
-                id = "${plugin.id}_web_$idx",
-                name = "${plugin.name} • بحث مباشر",
-                title = "${item.displayTitle} (${plugin.name})",
-                url = searchUrl,
-                quality = "1080p",
-                qualityScore = 1080,
-                addonName = plugin.name,
-                sourceType = "cloudstream"
-            ))
-        }
-        out
+        streams
     }
 }

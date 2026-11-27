@@ -1,3 +1,4 @@
 -keep class com.filmr.tv.** { *; }
--dontwarn okhttp3.**
--dontwarn okio.**
+-keep class org.libtorrent4j.** { *; }
+-dontwarn org.libtorrent4j.**
+-keepattributes Signature, InnerClasses, EnclosingMethod

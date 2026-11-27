@@ -1,10 +1,10 @@
 package com.filmr.tv.ui.screens
 
-import android.content.Intent
-import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,13 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,213 +33,229 @@ import coil.compose.AsyncImage
 import com.filmr.tv.data.model.*
 import com.filmr.tv.ui.FilmrViewModel
 import com.filmr.tv.ui.components.*
-
-@Composable
-fun NuvioSplashScreen() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(NuvioBg),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                text = "FILMR",
-                color = NuvioGold,
-                fontSize = 48.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 4.sp
-            )
-            CircularProgressIndicator(
-                color = NuvioGold,
-                strokeWidth = 3.dp,
-                modifier = Modifier.size(32.dp)
-            )
-        }
-    }
-}
+import kotlinx.coroutines.launch
 
 @Composable
 fun NuvioHomeScreen(
-    vm: FilmrViewModel,
+    viewModel: FilmrViewModel,
     onOpenDetails: (MediaItem) -> Unit,
-    onResumeContinue: (WatchProgressEntity) -> Unit,
-    onOpenDrawer: () -> Unit
+    onResumeProgress: (WatchProgressEntity) -> Unit
 ) {
-    val settings by vm.settings.collectAsState()
-    val rows by vm.catalogRows.collectAsState()
-    val progress by vm.watchProgress.collectAsState()
-    val isLoading by vm.isInitialLoading.collectAsState()
-    val hero by vm.focusedHeroItem.collectAsState()
-    val bg = if (settings.amoledBlack) Color.Black else NuvioBg
+    val catalogRows by viewModel.catalogRows.collectAsState()
+    val continueWatching by viewModel.continueWatching.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+
+    var heroItem by remember { mutableStateOf<MediaItem?>(null) }
+    LaunchedEffect(catalogRows) {
+        if (heroItem == null) {
+            heroItem = catalogRows.firstOrNull()?.items?.firstOrNull()
+        }
+    }
+
+    val bgColor = if (settings.amoledBlackMode) NuvioAmoledBg else NuvioBg
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(bg)
-            .onPreviewKeyEvent { ev ->
-                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Menu) {
-                    onOpenDrawer()
-                    true
-                } else false
-            }
+            .background(bgColor)
     ) {
-        hero?.let { h ->
-            AsyncImage(
-                model = h.displayBackdrop,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                alpha = 0.65f,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.62f)
-            )
+        // Panoramic Nuvio Edge-to-Edge Hero Backdrop
+        val activeHero = heroItem
+        if (activeHero != null && settings.showHeroBackdrop) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.62f)
-                    .background(Brush.horizontalGradient(listOf(Color(0xEE0A0D12), Color(0x440A0D12), Color.Transparent)))
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.62f)
-                    .background(Brush.verticalGradient(listOf(Color(0x220A0D12), bg)))
-            )
-        }
-
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .height(330.dp)
             ) {
-                NuvioChip(label = "☰ القائمة", selected = false, onClick = onOpenDrawer)
-                Text(
-                    text = "FILMR",
-                    color = NuvioGold,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 2.sp
+                val bgUrl = activeHero.backdropUrl ?: activeHero.posterUrl
+                if (!bgUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = bgUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    bgColor.copy(alpha = 0.25f),
+                                    bgColor.copy(alpha = 0.78f),
+                                    bgColor
+                                )
+                            )
+                        )
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    bgColor.copy(alpha = 0.92f),
+                                    bgColor.copy(alpha = 0.35f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
                 )
             }
+        }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(175.dp)
-                    .padding(horizontal = 32.dp),
-                contentAlignment = Alignment.BottomStart
-            ) {
-                hero?.let { h ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 40.dp)
+        ) {
+            // Hero Metadata Header
+            item {
+                if (activeHero != null) {
                     Column(
-                        modifier = Modifier.fillMaxWidth(0.65f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 28.dp, end = 28.dp, top = 26.dp, bottom = 14.dp)
                     ) {
-                        if (h.displayLogo.isNotBlank()) {
-                            AsyncImage(
-                                model = h.displayLogo,
-                                contentDescription = h.displayTitle,
-                                contentScale = ContentScale.Fit,
-                                alignment = Alignment.CenterStart,
-                                modifier = Modifier.height(60.dp).fillMaxWidth(0.55f)
-                            )
-                        } else {
-                            Text(
-                                text = h.displayTitle,
-                                color = Color.White,
-                                fontSize = 28.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = NuvioGold
+                            ) {
+                                Text(
+                                    text = if (activeHero.type == "series") "مسلسل" else "فيلم",
+                                    color = Color.Black,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                            if (activeHero.year.isNotBlank()) {
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = activeHero.year,
+                                    color = NuvioTextSecondary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            val rating = activeHero.imdbRating ?: activeHero.tmdbRating
+                            if (!rating.isNullOrBlank()) {
+                                Spacer(Modifier.width(10.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = NuvioGold,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = rating,
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (isRefreshing) {
+                                Spacer(Modifier.width(14.dp))
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = NuvioGold
+                                )
+                            }
                         }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (h.year.isNotBlank()) {
-                                Text(h.year, color = NuvioGold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            }
-                            if (h.rating > 0) {
-                                Text("★ ${String.format("%.1f", h.rating)}", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-                            if (h.runtimeMinutes > 0) {
-                                Text("${h.runtimeMinutes} د", color = Color(0xFFB0B8C8), fontSize = 13.sp)
-                            }
-                            if (h.genres.isNotEmpty()) {
-                                Text(h.genres.take(3).joinToString(" • "), color = Color(0xFFB0B8C8), fontSize = 13.sp)
-                            }
-                        }
+
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            text = h.overviewAr.ifBlank { h.overviewEn },
-                            color = Color(0xFFD6DCE8),
-                            fontSize = 13.sp,
-                            maxLines = 2,
+                            text = activeHero.displayTitle(settings.preferEnglishTitles),
+                            color = Color.White,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Black,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+
+                        if (activeHero.overview.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = activeHero.overview,
+                                color = NuvioTextSecondary,
+                                fontSize = 13.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth(0.68f)
+                            )
+                        }
+
+                        Spacer(Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            NuvioFocusButton(
+                                text = "التفاصيل والمشاهدة",
+                                icon = Icons.Default.PlayArrow,
+                                isPrimary = true,
+                                onClick = { onOpenDetails(activeHero) }
+                            )
+                            NuvioFocusButton(
+                                text = "تحديث القوائم",
+                                icon = Icons.Default.Refresh,
+                                onClick = { viewModel.refreshCatalogs() }
+                            )
+                        }
                     }
                 }
             }
 
-            if (isLoading && rows.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = NuvioGold)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    if (settings.showContinueWatching && progress.isNotEmpty()) {
-                        item(key = "continue_watching") {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text(
-                                    text = "متابعة المشاهدة",
-                                    color = Color.White,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 32.dp)
+            // Continue Watching Row
+            if (settings.showContinueWatching && continueWatching.isNotEmpty()) {
+                item {
+                    Column(modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)) {
+                        Text(
+                            text = "متابعة المشاهدة",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 28.dp, vertical = 6.dp)
+                        )
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 28.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            items(continueWatching, key = { it.key }) { prog ->
+                                ContinueWatchingCard(
+                                    progress = prog,
+                                    lowEndMode = settings.lowEndDeviceMode,
+                                    onClick = onResumeProgress
                                 )
-                                LazyRow(
-                                    contentPadding = PaddingValues(horizontal = 32.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
-                                    items(progress, key = { it.key }) { p ->
-                                        ContinueWatchingCard(progress = p, onClick = { onResumeContinue(p) })
-                                    }
-                                }
                             }
                         }
                     }
+                }
+            }
 
-                    items(rows, key = { "${it.addonId}_${it.catalogId}_${it.title}" }) { row ->
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                text = row.title,
-                                color = Color.White,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 32.dp)
+            // Catalog Rows (TMDB + Stremio Addons)
+            items(catalogRows, key = { it.id }) { row ->
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    Text(
+                        text = row.title,
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 6.dp)
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 28.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        items(row.items, key = { "${row.id}_${it.id}" }) { media ->
+                            NuvioPosterCard(
+                                item = media,
+                                preferEnglish = settings.preferEnglishTitles,
+                                lowEndMode = settings.lowEndDeviceMode,
+                                onFocused = { heroItem = it },
+                                onClick = onOpenDetails
                             )
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 32.dp),
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                items(row.items, key = { "${row.catalogId}_${it.id}" }) { item ->
-                                    NuvioPosterCard(
-                                        item = item,
-                                        onFocused = { vm.setFocusedHeroItem(item) },
-                                        onClick = { onOpenDetails(item) }
-                                    )
-                                }
-                            }
                         }
                     }
                 }
@@ -254,185 +266,210 @@ fun NuvioHomeScreen(
 
 @Composable
 fun NuvioDetailsScreen(
-    vm: FilmrViewModel,
-    initialItem: MediaItem,
-    onStartStream: (MediaItem, UnifiedStream, Int, Int, String) -> Unit,
+    initialMedia: MediaItem,
+    viewModel: FilmrViewModel,
+    onBack: () -> Unit,
+    onPlayStream: (MediaItem, UnifiedStream, List<SubtitleTrack>, Int, Int, String) -> Unit,
     onOpenPerson: (Int) -> Unit,
-    onOpenCompany: (Int, String, Boolean) -> Unit,
-    onBack: () -> Unit
+    onOpenCompany: (CompanyItem) -> Unit
 ) {
-    val context = LocalContext.current
-    val settings by vm.settings.collectAsState()
-    val libraryList by vm.libraryEntities.collectAsState()
-    var item by remember { mutableStateOf(initialItem) }
+    val settings by viewModel.settings.collectAsState()
+    val library by viewModel.libraryItems.collectAsState()
+    val history by viewModel.watchHistory.collectAsState()
+    val streams by viewModel.streams.collectAsState()
+    val isLoadingStreams by viewModel.isLoadingStreams.collectAsState()
+    val subtitles by viewModel.subtitles.collectAsState()
+
+    val scope = rememberCoroutineScope()
+    var media by remember { mutableStateOf(initialMedia) }
+    var isEnriching by remember { mutableStateOf(true) }
     var selectedSeason by remember { mutableIntStateOf(1) }
     var episodes by remember { mutableStateOf<List<EpisodeItem>>(emptyList()) }
-    var activeTab by remember { mutableStateOf(if (initialItem.type == "series") "episodes" else "cast") }
+    var showServerPicker by remember { mutableStateOf(false) }
+    var activeSeasonForStream by remember { mutableIntStateOf(0) }
+    var activeEpisodeForStream by remember { mutableIntStateOf(0) }
+    var activeEpisodeTitle by remember { mutableStateOf("") }
 
-    var showStreamsModal by remember { mutableStateOf(false) }
-    var streams by remember { mutableStateOf<List<UnifiedStream>>(emptyList()) }
-    var loadingStreams by remember { mutableStateOf(false) }
-    var targetEpisode by remember { mutableIntStateOf(1) }
-    var targetEpTitle by remember { mutableStateOf("") }
-    var selectedAddonTab by remember { mutableStateOf("الكل") }
-
-    val inLibrary = libraryList.any { it.id == item.id }
-
-    LaunchedEffect(initialItem.id) {
-        item = vm.enrichDetails(initialItem)
-        if (item.type == "series") {
-            activeTab = "episodes"
-            episodes = vm.getSeasonEpisodes(item.tmdbId, 1)
-        }
+    LaunchedEffect(initialMedia.id) {
+        isEnriching = true
+        val enriched = viewModel.enrichDetails(initialMedia)
+        media = enriched
+        episodes = enriched.episodes
+        isEnriching = false
     }
 
-    LaunchedEffect(selectedSeason, item.tmdbId) {
-        if (item.type == "series" && item.tmdbId > 0) {
-            episodes = vm.getSeasonEpisodes(item.tmdbId, selectedSeason)
-        }
-    }
-
-    fun openStreamPicker(season: Int, ep: Int, epTitle: String) {
-        targetEpisode = ep
-        targetEpTitle = epTitle
-        selectedAddonTab = "الكل"
-        showStreamsModal = true
-        loadingStreams = true
-    }
-
-    LaunchedEffect(showStreamsModal, selectedSeason, targetEpisode) {
-        if (showStreamsModal) {
-            streams = vm.fetchUnifiedStreams(item, selectedSeason, targetEpisode)
-            loadingStreams = false
-        }
-    }
+    val isInLibrary = library.any { it.mediaId == media.id }
+    val isWatched = history.any { it.mediaId == media.id }
+    val bgColor = if (settings.amoledBlackMode) NuvioAmoledBg else NuvioBg
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (settings.amoledBlack) Color.Black else NuvioBg)
+            .background(bgColor)
     ) {
-        AsyncImage(
-            model = item.displayBackdrop,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            alpha = 0.45f,
-            modifier = Modifier.fillMaxSize()
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(Color(0x660A0D12), Color(0xF50A0D12))))
-        )
+        // Backdrop
+        val bgUrl = media.backdropUrl ?: media.posterUrl
+        if (!bgUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = bgUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(380.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                bgColor.copy(alpha = 0.35f),
+                                bgColor.copy(alpha = 0.88f),
+                                bgColor
+                            )
+                        )
+                    )
+            )
+        }
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(32.dp),
+            contentPadding = PaddingValues(28.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
+            // Header Info + Ratings + Action Buttons
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
-                    verticalAlignment = Alignment.Top
+                    horizontalArrangement = Arrangement.spacedBy(22.dp)
                 ) {
-                    AsyncImage(
-                        model = item.displayPoster,
-                        contentDescription = item.displayTitle,
-                        contentScale = ContentScale.Crop,
+                    // Poster
+                    Box(
                         modifier = Modifier
-                            .width(175.dp)
-                            .height(255.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                            .width(170.dp)
+                            .height(250.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(NuvioCardBg)
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(14.dp))
                     ) {
-                        if (item.displayLogo.isNotBlank()) {
+                        if (!media.posterUrl.isNullOrBlank()) {
                             AsyncImage(
-                                model = item.displayLogo,
-                                contentDescription = item.displayTitle,
-                                contentScale = ContentScale.Fit,
-                                alignment = Alignment.CenterStart,
-                                modifier = Modifier.height(64.dp).fillMaxWidth(0.5f)
+                                model = media.posterUrl,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
                             )
-                        } else {
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = media.displayTitle(settings.preferEnglishTitles),
+                            color = Color.White,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        if (media.titleEn.isNotBlank() && media.titleEn != media.displayTitle(settings.preferEnglishTitles)) {
                             Text(
-                                text = item.displayTitle,
-                                color = Color.White,
-                                fontSize = 30.sp,
-                                fontWeight = FontWeight.ExtraBold
+                                text = media.titleEn,
+                                color = NuvioTextSecondary,
+                                fontSize = 14.sp
                             )
                         }
 
+                        Spacer(Modifier.height(10.dp))
+
+                        // Multi-Ratings Bar (Nuvio Style)
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (item.year.isNotBlank()) {
-                                Text(item.year, color = Color(0xFFB0B8C8), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            if (settings.showImdbRating && !media.imdbRating.isNullOrBlank()) {
+                                RatingBadge("IMDb", media.imdbRating!!, Color(0xFFF5C518))
                             }
-                            if (item.imdbRating.isNotBlank() && settings.mdblistImdb) {
-                                RatingBadge("IMDb", item.imdbRating, Color(0xFFF5C518))
+                            if (settings.showTmdbRating && !media.tmdbRating.isNullOrBlank()) {
+                                RatingBadge("TMDB", media.tmdbRating!!, Color(0xFF01B4E4))
                             }
-                            if (item.tmdbRating.isNotBlank()) {
-                                RatingBadge("TMDB", item.tmdbRating, Color(0xFF01B4E4))
+                            if (settings.showRtRating && !media.rtRating.isNullOrBlank()) {
+                                RatingBadge("RT", media.rtRating!!, Color(0xFFFA320A))
                             }
-                            if (item.rtRating.isNotBlank() && settings.mdblistRt) {
-                                RatingBadge("RT", item.rtRating, Color(0xFFFA320A))
+                            if (settings.showMetacriticRating && !media.metacriticRating.isNullOrBlank()) {
+                                RatingBadge("MC", media.metacriticRating!!, Color(0xFF66CC33))
                             }
-                            if (item.metacriticRating.isNotBlank() && settings.mdblistMetacritic) {
-                                RatingBadge("MC", item.metacriticRating, Color(0xFF66CC33))
+                            if (settings.showLetterboxdRating && !media.letterboxdRating.isNullOrBlank()) {
+                                RatingBadge("LB", media.letterboxdRating!!, Color(0xFF00E054))
                             }
-                            if (item.letterboxdRating.isNotBlank() && settings.mdblistLetterboxd) {
-                                RatingBadge("LB", item.letterboxdRating, Color(0xFF00E054))
+                            if (settings.showMalRating && !media.malRating.isNullOrBlank()) {
+                                RatingBadge("MAL", media.malRating!!, Color(0xFF2E51A2))
                             }
-                            if (item.malRating.isNotBlank() && settings.mdblistMal) {
-                                RatingBadge("MAL", item.malRating, Color(0xFF2E51A2))
+                            if (media.year.isNotBlank()) {
+                                Text(text = "• ${media.year}", color = NuvioTextSecondary, fontSize = 13.sp)
+                            }
+                            if (media.runtimeMinutes > 0) {
+                                Text(text = "• ${media.runtimeMinutes} د", color = NuvioTextSecondary, fontSize = 13.sp)
                             }
                         }
 
-                        if (item.genres.isNotEmpty()) {
+                        if (media.genres.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
                             Text(
-                                text = item.genres.joinToString(" • "),
+                                text = media.genres.joinToString(" • "),
                                 color = NuvioGold,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
 
+                        Spacer(Modifier.height(10.dp))
                         Text(
-                            text = item.overviewAr.ifBlank { item.overviewEn },
-                            color = Color(0xFFE0E6F0),
+                            text = media.overview.ifBlank { "لا يوجد وصف متاح حالياً." },
+                            color = NuvioTextPrimary,
                             fontSize = 14.sp,
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(16.dp))
 
+                        // Action Buttons Row
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            NuvioChip(
-                                label = if (item.type == "series") "▶ تشغيل الحلقة 1" else "▶ مشاهدة الآن",
-                                selected = true,
+                            NuvioFocusButton(
+                                text = if (media.type == "series") "اختر الحلقة والمصادر" else "تشغيل (عرض السيرفرات)",
+                                icon = Icons.Default.PlayArrow,
+                                isPrimary = true,
                                 onClick = {
-                                    openStreamPicker(1, 1, episodes.firstOrNull()?.title ?: "")
+                                    if (media.type == "series" && episodes.isNotEmpty()) {
+                                        val firstEp = episodes.first()
+                                        activeSeasonForStream = firstEp.season
+                                        activeEpisodeForStream = firstEp.episode
+                                        activeEpisodeTitle = firstEp.title
+                                        viewModel.loadStreamsAndSubtitles(media, firstEp.season, firstEp.episode)
+                                    } else {
+                                        activeSeasonForStream = 0
+                                        activeEpisodeForStream = 0
+                                        activeEpisodeTitle = ""
+                                        viewModel.loadStreamsAndSubtitles(media)
+                                    }
+                                    showServerPicker = true
                                 }
                             )
-                            NuvioChip(
-                                label = if (inLibrary) "✓ في المكتبة" else "+ أضف للمكتبة",
-                                selected = false,
-                                onClick = { vm.toggleLibrary(item) }
+
+                            NuvioFocusButton(
+                                text = if (isInLibrary) "في المكتبة ✓" else "أضف للمكتبة",
+                                icon = if (isInLibrary) Icons.Default.BookmarkAdded else Icons.Default.BookmarkAdd,
+                                onClick = { viewModel.toggleLibrary(media) }
                             )
-                            NuvioChip(
-                                label = "✓ تمت المشاهدة",
-                                selected = false,
-                                onClick = { vm.markAsWatched(item) }
+
+                            NuvioFocusButton(
+                                text = if (isWatched) "تمت المشاهدة ✓" else "تحديد كمشاهد",
+                                icon = Icons.Default.CheckCircle,
+                                onClick = { viewModel.toggleWatched(media) }
                             )
-                            NuvioChip(
-                                label = "رجوع",
-                                selected = false,
+
+                            NuvioFocusButton(
+                                text = "رجوع",
+                                icon = Icons.Default.ArrowBack,
                                 onClick = onBack
                             )
                         }
@@ -440,375 +477,435 @@ fun NuvioDetailsScreen(
                 }
             }
 
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (item.type == "series") {
-                        NuvioChip(
-                            label = "المواسم والحلقات",
-                            selected = activeTab == "episodes",
-                            onClick = { activeTab = "episodes" }
-                        )
-                    }
-                    NuvioChip(
-                        label = "طاقم العمل والمؤلف",
-                        selected = activeTab == "cast",
-                        onClick = { activeTab = "cast" }
-                    )
-                    NuvioChip(
-                        label = "جهات الإنتاج والشبكات",
-                        selected = activeTab == "companies",
-                        onClick = { activeTab = "companies" }
-                    )
-                    if (item.recommendations.isNotEmpty()) {
-                        NuvioChip(
-                            label = "أعمال مشابهة",
-                            selected = activeTab == "recs",
-                            onClick = { activeTab = "recs" }
-                        )
-                    }
-                }
-            }
-
-            if (activeTab == "episodes" && item.type == "series") {
+            // Seasons & Episodes (for Series)
+            if (media.type == "series" && media.seasonsCount > 0) {
                 item {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items((1..item.seasonsCount).toList()) { sNum ->
-                            NuvioChip(
-                                label = "الموسم $sNum",
-                                selected = selectedSeason == sNum,
-                                onClick = { selectedSeason = sNum }
-                            )
-                        }
-                    }
-                }
-                items(episodes, key = { "${it.season}_${it.episode}" }) { ep ->
-                    var epFocused by remember { mutableStateOf(false) }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { epFocused = it.isFocused }
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (epFocused) Color(0xFF232B3B) else NuvioCardBg)
-                            .border(
-                                width = if (epFocused) 2.dp else 1.dp,
-                                color = if (epFocused) Color.White else Color(0x1FFFFFFF),
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable { openStreamPicker(ep.season, ep.episode, ep.title) }
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        AsyncImage(
-                            model = ep.stillUrl.ifBlank { item.displayBackdrop },
-                            contentDescription = ep.title,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .width(150.dp)
-                                .height(86.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                        )
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "${ep.episode}. ${ep.title}",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                if (ep.rating > 0) {
-                                    Text("★ ${String.format("%.1f", ep.rating)}", color = NuvioGold, fontSize = 12.sp)
-                                }
-                                Text("${ep.runtime} د", color = Color(0xFF9AA4B8), fontSize = 12.sp)
-                            }
-                            Text(
-                                text = ep.overview,
-                                color = Color(0xFFB8C0D0),
-                                fontSize = 12.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (activeTab == "cast") {
-                item {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(item.cast, key = { it.id }) { member ->
-                            var cFocused by remember { mutableStateOf(false) }
-                            Column(
-                                modifier = Modifier
-                                    .width(115.dp)
-                                    .onFocusChanged { cFocused = it.isFocused }
-                                    .clickable { onOpenPerson(member.id) },
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                AsyncImage(
-                                    model = member.profileUrl ?: "",
-                                    contentDescription = member.name,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(86.dp)
-                                        .clip(CircleShape)
-                                        .background(NuvioCardBg)
-                                        .border(
-                                            width = if (cFocused) 2.5.dp else 1.dp,
-                                            color = if (cFocused) Color.White else Color(0x33FFFFFF),
-                                            shape = CircleShape
-                                        )
-                                )
-                                Text(
-                                    text = member.name,
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = member.character,
-                                    color = Color(0xFF9AA4B8),
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (activeTab == "companies") {
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (item.network.isNotBlank() && item.networkId > 0) {
-                            NuvioChip(
-                                label = "شبكة: ${item.network}",
-                                selected = true,
-                                onClick = { onOpenCompany(item.networkId, item.network, true) }
-                            )
-                        }
-                        item.companies.forEach { comp ->
-                            NuvioChip(
-                                label = comp.name,
-                                selected = false,
-                                onClick = { onOpenCompany(comp.id, comp.name, false) }
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (activeTab == "recs") {
-                item {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(item.recommendations, key = { it.id }) { rec ->
-                            NuvioPosterCard(item = rec, onClick = { item = rec })
-                        }
-                    }
-                }
-            }
-        }
-
-        if (showStreamsModal) {
-            val addonTabs = remember(streams) {
-                listOf("الكل") + streams.map { it.addonName }.filter { it.isNotBlank() }.distinct()
-            }
-            val filteredStreams = remember(streams, selectedAddonTab) {
-                if (selectedAddonTab == "الكل") streams else streams.filter { it.addonName == selectedAddonTab }
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xDD05070A)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth(0.84f)
-                        .fillMaxHeight(0.82f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF101520))
-                        .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(16.dp))
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "اختر سيرفر المشاهدة • ${item.displayTitle}",
+                            text = "المواسم والحلقات",
                             color = Color.White,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        NuvioChip(label = "إغلاق", selected = false, onClick = { showStreamsModal = false })
-                    }
-
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(addonTabs) { tabName ->
-                            NuvioChip(
-                                label = tabName,
-                                selected = selectedAddonTab == tabName,
-                                onClick = { selectedAddonTab = tabName }
-                            )
-                        }
-                    }
-
-                    if (loadingStreams) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                CircularProgressIndicator(color = NuvioGold)
-                                Text("جاري جلب الروابط من جميع الإضافات...", color = Color.White, fontSize = 14.sp)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items((1..media.seasonsCount).toList()) { sNum ->
+                                NuvioChip(
+                                    label = "الموسم $sNum",
+                                    selected = selectedSeason == sNum,
+                                    onClick = {
+                                        selectedSeason = sNum
+                                        val tId = media.tmdbId
+                                        if (tId != null) {
+                                            scope.launch {
+                                                episodes = viewModel.loadSeasonEpisodes(tId, sNum, media.imdbId ?: media.id)
+                                            }
+                                        }
+                                    }
+                                )
                             }
                         }
-                    } else if (filteredStreams.isEmpty()) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("لا توجد روابط متاحة في هذا التبويب حالياً", color = Color(0xFF9AA4B8), fontSize = 15.sp)
+
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(episodes, key = { it.id }) { ep ->
+                                EpisodeCard(
+                                    episode = ep,
+                                    onClick = {
+                                        activeSeasonForStream = ep.season
+                                        activeEpisodeForStream = ep.episode
+                                        activeEpisodeTitle = ep.title
+                                        viewModel.loadStreamsAndSubtitles(media, ep.season, ep.episode)
+                                        showServerPicker = true
+                                    }
+                                )
+                            }
                         }
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(filteredStreams, key = { it.id }) { st ->
-                                var sFocused by remember { mutableStateOf(false) }
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .onFocusChanged { sFocused = it.isFocused }
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(if (sFocused) Color(0xFF232C3E) else NuvioCardBg)
-                                        .border(
-                                            width = if (sFocused) 2.dp else 1.dp,
-                                            color = if (sFocused) Color.White else Color(0x1FFFFFFF),
-                                            shape = RoundedCornerShape(10.dp)
-                                        )
-                                        .clickable {
-                                            showStreamsModal = false
-                                            if (st.url.contains("google.com/search")) {
-                                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(st.url)))
-                                            } else {
-                                                onStartStream(item, st, selectedSeason, targetEpisode, targetEpTitle)
-                                            }
+                    }
+                }
+            }
+
+            // Cast Row
+            if (media.cast.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "طاقم التمثيل",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(media.cast, key = { it.id }) { actor ->
+                                CastCard(actor = actor, onClick = { onOpenPerson(actor.id) })
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Companies & Networks
+            if (media.companies.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "الشبكات وجهات الإنتاج",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(media.companies, key = { "${it.isNetwork}_${it.id}" }) { comp ->
+                                NuvioChip(
+                                    label = comp.name,
+                                    selected = false,
+                                    icon = if (comp.isNetwork) Icons.Default.LiveTv else Icons.Default.Business,
+                                    onClick = { onOpenCompany(comp) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Recommendations
+            if (media.recommendations.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "أعمال مشابهة قد تعجبك",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            items(media.recommendations, key = { "rec_${it.id}" }) { rec ->
+                                NuvioPosterCard(
+                                    item = rec,
+                                    preferEnglish = settings.preferEnglishTitles,
+                                    lowEndMode = settings.lowEndDeviceMode,
+                                    onClick = {
+                                        media = it
+                                        scope.launch {
+                                            val enr = viewModel.enrichDetails(it)
+                                            media = enr
+                                            episodes = enr.episodes
                                         }
-                                        .padding(14.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(if (st.quality == "4K") NuvioGold else Color(0xFF263044))
-                                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                                    ) {
-                                        Text(
-                                            text = st.quality,
-                                            color = if (st.quality == "4K") Color.Black else Color.White,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 12.sp
-                                        )
                                     }
-                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text(st.addonName, color = NuvioGold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            if (st.isTorrent) {
-                                                Text("• تورنت مدمج", color = Color(0xFF4ADE80), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                            }
-                                            if (st.sizeText.isNotBlank()) {
-                                                Text("• ${st.sizeText}", color = Color(0xFF9AA4B8), fontSize = 12.sp)
-                                            }
-                                            if (st.seeders > 0) {
-                                                Text("• 👤 ${st.seeders}", color = Color(0xFF9AA4B8), fontSize = 12.sp)
-                                            }
-                                        }
-                                        Text(
-                                            text = st.title,
-                                            color = Color.White,
-                                            fontSize = 13.sp,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
+                                )
                             }
                         }
                     }
                 }
             }
         }
+
+        // NUVIO-STYLE UNIFIED SERVER PICKER OVERLAY (Stremio + CloudStream + Built-in Torrent Tabs)
+        if (showServerPicker) {
+            NuvioServerPickerOverlay(
+                mediaTitle = media.displayTitle(settings.preferEnglishTitles),
+                episodeLabel = if (activeSeasonForStream > 0) "الموسم $activeSeasonForStream • الحلقة $activeEpisodeForStream" else "",
+                streams = streams,
+                isLoading = isLoadingStreams,
+                onDismiss = { showServerPicker = false },
+                onSelectStream = { selectedStream ->
+                    showServerPicker = false
+                    onPlayStream(
+                        media,
+                        selectedStream,
+                        subtitles,
+                        activeSeasonForStream,
+                        activeEpisodeForStream,
+                        activeEpisodeTitle
+                    )
+                }
+            )
+        }
     }
 }
 
 @Composable
-fun RatingBadge(label: String, score: String, accent: Color) {
+private fun RatingBadge(label: String, score: String, accent: Color) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(Color(0xFF171D29))
+            .background(NuvioCardBg)
             .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(horizontal = 7.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = accent, fontWeight = FontWeight.ExtraBold, fontSize = 11.sp)
-        Text(score, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.width(4.dp))
+        Text(text = score, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
-fun NuvioPersonScreen(
-    vm: FilmrViewModel,
-    personId: Int,
-    onOpenDetails: (MediaItem) -> Unit,
-    onBack: () -> Unit
-) {
-    var details by remember { mutableStateOf<PersonDetails?>(null) }
-    LaunchedEffect(personId) { details = vm.getPersonDetails(personId) }
-
+private fun EpisodeCard(episode: EpisodeItem, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .background(NuvioBg)
-            .padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+            .width(220.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(NuvioCardBg)
+            .border(
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) Color.White else Color.White.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .clickable { onClick() }
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            NuvioChip(label = "رجوع", onClick = onBack)
-            Text(details?.name ?: "جاري التحميل...", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        }
-        details?.let { p ->
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(115.dp)
+                .background(Color.Black)
+        ) {
+            if (!episode.thumbnailUrl.isNullOrBlank()) {
                 AsyncImage(
-                    model = p.profileUrl ?: "",
-                    contentDescription = p.name,
+                    model = episode.thumbnailUrl,
+                    contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(120.dp).clip(CircleShape).background(NuvioCardBg)
+                    modifier = Modifier.fillMaxSize()
                 )
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (p.birthday.isNotBlank()) {
-                        Text("تاريخ الميلاد: ${p.birthday} • ${p.placeOfBirth}", color = NuvioGold, fontSize = 13.sp)
+            }
+            Text(
+                text = "الحلقة ${episode.episode}",
+                color = Color.Black,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(NuvioGold)
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(
+                text = episode.title,
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (episode.overview.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = episode.overview,
+                    color = NuvioTextSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CastCard(actor: CastMember, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .width(105.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(78.dp)
+                .clip(CircleShape)
+                .background(NuvioCardBg)
+                .border(
+                    width = if (focused) 2.5.dp else 1.dp,
+                    color = if (focused) Color.White else Color.White.copy(alpha = 0.15f),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!actor.profileUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = actor.profileUrl,
+                    contentDescription = actor.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(Icons.Default.Person, contentDescription = null, tint = NuvioTextSecondary)
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = actor.name,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (actor.character.isNotBlank()) {
+            Text(
+                text = actor.character,
+                color = NuvioTextSecondary,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * Nuvio-Style Server Picker Modal:
+ * Displays tabbed filtering by Addon/Engine (الكل، إضافات Stremio، إضافات CloudStream، تورنت مدمج، + كل إضافة على حدة)
+ * so the user sees all available streams and chooses the server they prefer!
+ */
+@Composable
+fun NuvioServerPickerOverlay(
+    mediaTitle: String,
+    episodeLabel: String,
+    streams: List<UnifiedStream>,
+    isLoading: Boolean,
+    onDismiss: () -> Unit,
+    onSelectStream: (UnifiedStream) -> Unit
+) {
+    var selectedFilter by remember { mutableStateOf("ALL") }
+
+    val addonTabs = remember(streams) {
+        streams.map { it.addonName }.distinct()
+    }
+
+    val filteredStreams = remember(streams, selectedFilter) {
+        when (selectedFilter) {
+            "ALL" -> streams
+            "STREMIO" -> streams.filter { it.sourceEngine == "stremio" || (it.sourceEngine == "torrent" && !it.id.contains("_cs_")) }
+            "CLOUDSTREAM" -> streams.filter { it.sourceEngine == "cloudstream" }
+            "TORRENT" -> streams.filter { it.isTorrent }
+            else -> streams.filter { it.addonName == selectedFilter }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.86f))
+            .padding(28.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .fillMaxHeight(0.88f),
+            shape = RoundedCornerShape(18.dp),
+            color = Color(0xFF10141F),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
+        ) {
+            Column(modifier = Modifier.padding(22.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "اختر السيرفر ومصدر التشغيل",
+                            color = NuvioGold,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = if (episodeLabel.isNotBlank()) "$mediaTitle • $episodeLabel" else mediaTitle,
+                            color = NuvioTextSecondary,
+                            fontSize = 13.sp
+                        )
                     }
-                    Text(
-                        text = p.biography.ifBlank { "لا تتوفر سيرة ذاتية حالياً." },
-                        color = Color(0xFFD0D6E0),
-                        fontSize = 13.sp,
-                        maxLines = 5,
-                        overflow = TextOverflow.Ellipsis
+                    NuvioFocusButton(
+                        text = "إغلاق",
+                        icon = Icons.Default.Close,
+                        onClick = onDismiss
                     )
                 }
-            }
-            Text("أشهر الأعمال", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(136.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                items(p.knownFor, key = { it.id }) { work ->
-                    NuvioPosterCard(item = work, onClick = { onOpenDetails(work) })
+
+                Spacer(Modifier.height(14.dp))
+
+                // Categorized Tabs (All, Stremio, CloudStream, Torrent, Individual Addons)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        NuvioChip(
+                            label = "الكل (${streams.size})",
+                            selected = selectedFilter == "ALL",
+                            onClick = { selectedFilter = "ALL" }
+                        )
+                    }
+                    item {
+                        val count = streams.count { it.sourceEngine != "cloudstream" }
+                        NuvioChip(
+                            label = "Stremio ($count)",
+                            selected = selectedFilter == "STREMIO",
+                            onClick = { selectedFilter = "STREMIO" }
+                        )
+                    }
+                    item {
+                        val count = streams.count { it.sourceEngine == "cloudstream" }
+                        NuvioChip(
+                            label = "CloudStream ($count)",
+                            selected = selectedFilter == "CLOUDSTREAM",
+                            onClick = { selectedFilter = "CLOUDSTREAM" }
+                        )
+                    }
+                    item {
+                        val count = streams.count { it.isTorrent }
+                        NuvioChip(
+                            label = "تورنت مدمج ($count)",
+                            selected = selectedFilter == "TORRENT",
+                            onClick = { selectedFilter = "TORRENT" }
+                        )
+                    }
+                    items(addonTabs) { addonName ->
+                        NuvioChip(
+                            label = addonName,
+                            selected = selectedFilter == addonName,
+                            onClick = { selectedFilter = addonName }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                if (isLoading && streams.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = NuvioGold)
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = "جاري جلب الروابط من إضافات Stremio و CloudStream...",
+                                color = Color.White,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                } else if (filteredStreams.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "لا توجد روابط متاحة في هذا التصنيف حالياً. جرّب تفعيل إضافات إضافية من الإعدادات.",
+                            color = NuvioTextSecondary,
+                            fontSize = 14.sp
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(filteredStreams, key = { it.id }) { stream ->
+                            StreamServerRow(stream = stream, onClick = { onSelectStream(stream) })
+                        }
+                    }
                 }
             }
         }
@@ -816,100 +913,188 @@ fun NuvioPersonScreen(
 }
 
 @Composable
-fun NuvioCompanyScreen(
-    vm: FilmrViewModel,
-    companyId: Int,
-    companyName: String,
-    isNetwork: Boolean,
-    onOpenDetails: (MediaItem) -> Unit,
-    onBack: () -> Unit
-) {
-    var sortBy by remember { mutableStateOf("popularity.desc") }
-    var items by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+private fun StreamServerRow(stream: UnifiedStream, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
 
-    LaunchedEffect(companyId, sortBy) {
-        items = vm.discoverByCompanyOrNetwork(companyId, isNetwork, sortBy)
-    }
-
-    Column(
+    Surface(
         modifier = Modifier
-            .fillMaxSize()
-            .background(NuvioBg)
-            .padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        color = if (focused) Color.White.copy(alpha = 0.16f) else NuvioCardBg,
+        border = BorderStroke(
+            width = if (focused) 2.5.dp else 1.dp,
+            color = if (focused) Color.White else Color.White.copy(alpha = 0.08f)
+        )
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            NuvioChip(label = "رجوع", onClick = onBack)
-            Text(companyName, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NuvioChip(label = "الرائج", selected = sortBy == "popularity.desc", onClick = { sortBy = "popularity.desc" })
-            NuvioChip(label = "الأعلى تقييماً", selected = sortBy == "vote_average.desc", onClick = { sortBy = "vote_average.desc" })
-            NuvioChip(label = "المضاف حديثاً", selected = sortBy == "primary_release_date.desc", onClick = { sortBy = "primary_release_date.desc" })
-        }
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(136.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            items(items, key = { it.id }) { work ->
-                NuvioPosterCard(item = work, onClick = { onOpenDetails(work) })
+            // Quality & Engine Badge
+            Column(
+                modifier = Modifier
+                    .width(96.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stream.quality,
+                    color = NuvioGold,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = when {
+                        stream.isTorrent -> "TORRENT"
+                        stream.sourceEngine == "cloudstream" -> "CLOUD"
+                        else -> "DIRECT"
+                    },
+                    color = when {
+                        stream.isTorrent -> Color(0xFF38BDF8)
+                        stream.sourceEngine == "cloudstream" -> Color(0xFFA855F7)
+                        else -> Color(0xFF22C55E)
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stream.addonName,
+                        color = NuvioGold,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (stream.sizeText.isNotBlank()) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = "💾 ${stream.sizeText}",
+                            color = NuvioTextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    if (stream.seeders > 0) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = "👤 ${stream.seeders}",
+                            color = Color(0xFF22C55E),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stream.description.ifBlank { stream.title },
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Icon(
+                imageVector = Icons.Default.PlayCircleFilled,
+                contentDescription = "تشغيل",
+                tint = if (focused) NuvioGold else Color.White,
+                modifier = Modifier.size(30.dp)
+            )
         }
     }
 }
 
 @Composable
 fun NuvioSearchScreen(
-    vm: FilmrViewModel,
-    onOpenDetails: (MediaItem) -> Unit,
-    onOpenDrawer: () -> Unit
+    viewModel: FilmrViewModel,
+    onOpenDetails: (MediaItem) -> Unit
 ) {
-    var query by remember { mutableStateOf("") }
-    var rows by remember { mutableStateOf<List<AddonCatalogRow>>(emptyList()) }
-    var searching by remember { mutableStateOf(false) }
+    val results by viewModel.searchResults.collectAsState()
+    val isSearching by viewModel.isSearching.collectAsState()
+    val history by viewModel.searchHistory.collectAsState()
+    val settings by viewModel.settings.collectAsState()
 
-    LaunchedEffect(query) {
-        if (query.trim().length >= 2) {
-            searching = true
-            rows = vm.searchAll(query)
-            searching = false
-        } else {
-            rows = emptyList()
-        }
-    }
+    var query by remember { mutableStateOf("") }
+    val bgColor = if (settings.amoledBlackMode) NuvioAmoledBg else NuvioBg
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(NuvioBg)
-            .padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+            .background(bgColor)
+            .padding(28.dp)
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            NuvioChip(label = "☰ القائمة", onClick = onOpenDrawer)
-            NuvioWhiteTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = "ابحث عن فيلم، مسلسل، أو أنمي...",
-                modifier = Modifier.weight(1f)
+        Text(
+            text = "البحث الشامل (TMDB + الإضافات)",
+            color = Color.White,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Black
+        )
+        Spacer(Modifier.height(14.dp))
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                NuvioWhiteTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = "اكتب اسم الفيلم أو المسلسل بالعربية أو الإنجليزية..."
+                )
+            }
+            NuvioFocusButton(
+                text = "بحث",
+                icon = Icons.Default.Search,
+                isPrimary = true,
+                onClick = { viewModel.searchMedia(query) }
             )
         }
-        if (searching) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+
+        if (history.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(history, key = { it.query }) { item ->
+                    NuvioChip(
+                        label = item.query,
+                        selected = false,
+                        icon = Icons.Default.History,
+                        onClick = {
+                            query = item.query
+                            viewModel.searchMedia(item.query)
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        if (isSearching) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = NuvioGold)
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                items(rows, key = { "${it.addonId}_${it.title}" }) { r ->
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(r.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            items(r.items, key = { it.id }) { m ->
-                                NuvioPosterCard(item = m, onClick = { onOpenDetails(m) })
-                            }
-                        }
-                    }
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 140.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(results, key = { "${it.type}_${it.id}" }) { item ->
+                    NuvioPosterCard(
+                        item = item,
+                        preferEnglish = settings.preferEnglishTitles,
+                        lowEndMode = settings.lowEndDeviceMode,
+                        onClick = onOpenDetails
+                    )
                 }
             }
         }
@@ -918,34 +1103,530 @@ fun NuvioSearchScreen(
 
 @Composable
 fun NuvioLibraryScreen(
-    vm: FilmrViewModel,
-    onOpenDetails: (MediaItem) -> Unit,
-    onOpenDrawer: () -> Unit
+    viewModel: FilmrViewModel,
+    onOpenDetails: (MediaItem) -> Unit
 ) {
-    val library by vm.library.collectAsState()
+    val library by viewModel.libraryItems.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val stremioAccount by viewModel.stremioAccount.collectAsState()
+    val bgColor = if (settings.amoledBlackMode) NuvioAmoledBg else NuvioBg
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bgColor)
+            .padding(28.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "مكتبتي (${library.size})",
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black
+                )
+                if (stremioAccount.isLoggedIn) {
+                    Text(
+                        text = "متزامنة تلقائياً مع حساب Stremio: ${stremioAccount.email}",
+                        color = Color(0xFF22C55E),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            if (stremioAccount.isLoggedIn) {
+                NuvioFocusButton(
+                    text = "مزامنة فورية الآن",
+                    icon = Icons.Default.Sync,
+                    isPrimary = true,
+                    onClick = { viewModel.syncNowStremioAccount() }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        if (library.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "مكتبتك فارغة حالياً. أضف أعمالاً من صفحة التفاصيل أو قم بمزامنة حساب Stremio.",
+                    color = NuvioTextSecondary,
+                    fontSize = 14.sp
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 140.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(library, key = { it.mediaId }) { lib ->
+                    val mediaItem = MediaItem(
+                        id = lib.mediaId,
+                        imdbId = lib.imdbId,
+                        type = lib.mediaType,
+                        titleAr = lib.titleAr,
+                        titleEn = lib.titleEn,
+                        posterUrl = lib.posterUrl,
+                        backdropUrl = lib.backdropUrl,
+                        year = lib.year,
+                        imdbRating = lib.rating
+                    )
+                    NuvioPosterCard(
+                        item = mediaItem,
+                        preferEnglish = settings.preferEnglishTitles,
+                        lowEndMode = settings.lowEndDeviceMode,
+                        onClick = onOpenDetails
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NuvioSettingsScreen(viewModel: FilmrViewModel) {
+    val settings by viewModel.settings.collectAsState()
+    val stremioAccount by viewModel.stremioAccount.collectAsState()
+    val allAddons by viewModel.allAddons.collectAsState()
+
+    var activeSection by remember { mutableIntStateOf(0) }
+    var stremioEmail by remember { mutableStateOf("") }
+    var stremioPass by remember { mutableStateOf("") }
+    var stremioAddonUrl by remember { mutableStateOf("") }
+    var cloudStreamRepoUrl by remember { mutableStateOf("") }
+    var feedbackMsg by remember { mutableStateOf<String?>(null) }
+
+    val stremioAddons = remember(allAddons) { allAddons.filter { it.sourceType == "stremio" } }
+    val cloudStreamAddons = remember(allAddons) { allAddons.filter { it.sourceType == "cloudstream" } }
+    val bgColor = if (settings.amoledBlackMode) NuvioAmoledBg else NuvioBg
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bgColor)
+            .padding(28.dp)
+    ) {
+        Text(
+            text = "إعدادات Filmr TV",
+            color = Color.White,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Black
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        // Settings Category Tabs
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            NuvioChip(
+                label = "مزامنة حساب Stremio",
+                selected = activeSection == 0,
+                icon = Icons.Default.CloudSync,
+                onClick = { activeSection = 0 }
+            )
+            NuvioChip(
+                label = "إضافات Stremio (${stremioAddons.size})",
+                selected = activeSection == 1,
+                icon = Icons.Default.Extension,
+                onClick = { activeSection = 1 }
+            )
+            NuvioChip(
+                label = "مستودعات CloudStream (${cloudStreamAddons.size})",
+                selected = activeSection == 2,
+                icon = Icons.Default.Hub,
+                onClick = { activeSection = 2 }
+            )
+            NuvioChip(
+                label = "الأداء والمظهر والترجمة",
+                selected = activeSection == 3,
+                icon = Icons.Default.Tune,
+                onClick = { activeSection = 3 }
+            )
+        }
+
+        if (!feedbackMsg.isNullOrBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Text(text = feedbackMsg!!, color = NuvioGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(bottom = 32.dp)
+        ) {
+            when (activeSection) {
+                // SECTION 0: Stremio Account Fast Sync
+                0 -> {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = NuvioSurface,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    text = "مزامنة حساب Stremio الفورية",
+                                    color = NuvioGold,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "سجّل الدخول بحسابك في Stremio ليتم تثبيت جميع إضافاتك ومزامنة مكتبتك وسجل متابعة المشاهدة تلقائياً وبسرعة فائقة.",
+                                    color = NuvioTextSecondary,
+                                    fontSize = 13.sp
+                                )
+
+                                if (stremioAccount.isLoggedIn) {
+                                    Text(
+                                        text = "الحساب المتصل: ${stremioAccount.email}",
+                                        color = Color(0xFF22C55E),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "• الإضافات المتزامنة: ${stremioAccount.syncedAddonsCount}   • عناصر المكتبة: ${stremioAccount.syncedLibraryCount}   • سجل المشاهدة: ${stremioAccount.syncedHistoryCount}",
+                                        color = Color.White,
+                                        fontSize = 13.sp
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        NuvioFocusButton(
+                                            text = "مزامنة سريعة الآن",
+                                            icon = Icons.Default.Sync,
+                                            isPrimary = true,
+                                            onClick = { viewModel.syncNowStremioAccount() }
+                                        )
+                                        NuvioFocusButton(
+                                            text = "تسجيل الخروج",
+                                            icon = Icons.Default.Logout,
+                                            onClick = { viewModel.logoutStremioAccount() }
+                                        )
+                                    }
+                                } else {
+                                    NuvioWhiteTextField(
+                                        value = stremioEmail,
+                                        onValueChange = { stremioEmail = it },
+                                        placeholder = "البريد الإلكتروني لحساب Stremio"
+                                    )
+                                    NuvioWhiteTextField(
+                                        value = stremioPass,
+                                        onValueChange = { stremioPass = it },
+                                        placeholder = "كلمة المرور",
+                                        isPassword = true
+                                    )
+                                    NuvioFocusButton(
+                                        text = "تسجيل الدخول ومزامنة كل شيء فوراً",
+                                        icon = Icons.Default.CloudSync,
+                                        isPrimary = true,
+                                        onClick = {
+                                            viewModel.loginAndSyncStremio(stremioEmail, stremioPass) { _, msg ->
+                                                feedbackMsg = msg
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // SECTION 1: Separate Stremio Addons Manager
+                1 -> {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = NuvioSurface,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "تثبيت إضافة Stremio يدوياً (manifest.json)",
+                                    color = NuvioGold,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                NuvioWhiteTextField(
+                                    value = stremioAddonUrl,
+                                    onValueChange = { stremioAddonUrl = it },
+                                    placeholder = "https://.../manifest.json"
+                                )
+                                NuvioFocusButton(
+                                    text = "تثبيت إضافة Stremio",
+                                    icon = Icons.Default.AddCircle,
+                                    isPrimary = true,
+                                    onClick = {
+                                        viewModel.installStremioAddon(stremioAddonUrl) { ok, msg ->
+                                            feedbackMsg = msg
+                                            if (ok) stremioAddonUrl = ""
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    items(stremioAddons, key = { it.id }) { addon ->
+                        AddonManageCard(
+                            addon = addon,
+                            badgeText = if (addon.isFromStremioAccount) "حساب Stremio" else "Stremio",
+                            onToggle = { viewModel.toggleAddon(addon.id, !addon.enabled) },
+                            onDelete = { viewModel.removeAddon(addon.id) }
+                        )
+                    }
+                }
+
+                // SECTION 2: Completely Separate CloudStream Repo & Manual Plugin Installer
+                2 -> {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = NuvioSurface,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "مستودعات وإضافات CloudStream (قسم مستقل)",
+                                    color = Color(0xFFA855F7),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "أضف رابط مستودع CloudStream (repo.json أو plugins.json) وسيتم دمج سيرفراته تلقائياً داخل قائمة السيرفرات عند تشغيل أي فيلم أو مسلسل.",
+                                    color = NuvioTextSecondary,
+                                    fontSize = 12.sp
+                                )
+                                NuvioWhiteTextField(
+                                    value = cloudStreamRepoUrl,
+                                    onValueChange = { cloudStreamRepoUrl = it },
+                                    placeholder = "رابط مستودع أو إضافة CloudStream (.json)"
+                                )
+                                NuvioFocusButton(
+                                    text = "تثبيت مستودع CloudStream",
+                                    icon = Icons.Default.AddLink,
+                                    isPrimary = true,
+                                    onClick = {
+                                        viewModel.installCloudStreamRepo(cloudStreamRepoUrl) { ok, msg ->
+                                            feedbackMsg = msg
+                                            if (ok) cloudStreamRepoUrl = ""
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    items(cloudStreamAddons, key = { it.id }) { plugin ->
+                        AddonManageCard(
+                            addon = plugin,
+                            badgeText = "CloudStream",
+                            onToggle = { viewModel.toggleAddon(plugin.id, !plugin.enabled) },
+                            onDelete = { viewModel.removeAddon(plugin.id) }
+                        )
+                    }
+                }
+
+                // SECTION 3: Performance (Low-End vs High-End), Nuvio Appearance & Subtitle Studio
+                3 -> {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SettingsToggleRow(
+                                title = "وضع الأجهزة الضعيفة والخفيفة (Low-End Performance Mode)",
+                                subtitle = "يقلل استهلاك الذاكرة والرسوميات لتشغيل فائق السرعة على أجهزة TV Box الضعيفة",
+                                checked = settings.lowEndDeviceMode,
+                                onToggle = { viewModel.updateSettings { it.copy(lowEndDeviceMode = !it.lowEndDeviceMode) } }
+                            )
+                            SettingsToggleRow(
+                                title = "وضع AMOLED الأسود بالكامل",
+                                subtitle = "خلفية سوداء نقية توفر الطاقة وتمنح تبايناً سينمائياً",
+                                checked = settings.amoledBlackMode,
+                                onToggle = { viewModel.updateSettings { it.copy(amoledBlackMode = !it.amoledBlackMode) } }
+                            )
+                            SettingsToggleRow(
+                                title = "تفضيل العناوين الإنجليزية",
+                                subtitle = "عرض الاسم الإنجليزي للأفلام والمسلسلات بدلاً من المعرّب",
+                                checked = settings.preferEnglishTitles,
+                                onToggle = { viewModel.updateSettings { it.copy(preferEnglishTitles = !it.preferEnglishTitles) } }
+                            )
+                            SettingsToggleRow(
+                                title = "إظهار صف متابعة المشاهدة",
+                                subtitle = "عرض الأعمال التي لم تكمل مشاهدتها في الشاشة الرئيسية",
+                                checked = settings.showContinueWatching,
+                                onToggle = { viewModel.updateSettings { it.copy(showContinueWatching = !it.showContinueWatching) } }
+                            )
+                            SettingsToggleRow(
+                                title = "التشغيل التلقائي للحلقة التالية",
+                                subtitle = "الانتقال التلقائي للحلقة التالية عند انتهاء الحلقة الحالية",
+                                checked = settings.autoPlayNextEpisode,
+                                onToggle = { viewModel.updateSettings { it.copy(autoPlayNextEpisode = !it.autoPlayNextEpisode) } }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddonManageCard(
+    addon: AddonEntity,
+    badgeText: String,
+    onToggle: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = NuvioCardBg,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = addon.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = badgeText,
+                        color = NuvioGold,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+                if (addon.description.isNotBlank()) {
+                    Text(
+                        text = addon.description,
+                        color = NuvioTextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NuvioChip(
+                    label = if (addon.enabled) "مفعّلة" else "معطّلة",
+                    selected = addon.enabled,
+                    onClick = onToggle
+                )
+                NuvioChip(
+                    label = "حذف",
+                    selected = false,
+                    icon = Icons.Default.Delete,
+                    onClick = onDelete
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onToggle: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .clickable { onToggle() },
+        shape = RoundedCornerShape(12.dp),
+        color = if (focused) Color.White.copy(alpha = 0.14f) else NuvioCardBg,
+        border = BorderStroke(
+            width = if (focused) 2.dp else 1.dp,
+            color = if (focused) Color.White else Color.White.copy(alpha = 0.08f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(text = subtitle, color = NuvioTextSecondary, fontSize = 12.sp)
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = { onToggle() },
+                colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = NuvioGold)
+            )
+        }
+    }
+}
+
+@Composable
+fun NuvioPersonScreen(
+    personId: Int,
+    viewModel: FilmrViewModel,
+    onBack: () -> Unit,
+    onOpenDetails: (MediaItem) -> Unit
+) {
+    val settings by viewModel.settings.collectAsState()
+    var person by remember { mutableStateOf<PersonDetails?>(null) }
+
+    LaunchedEffect(personId) {
+        person = viewModel.loadPersonDetails(personId)
+    }
+
+    val p = person
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(NuvioBg)
-            .padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+            .padding(28.dp)
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            NuvioChip(label = "☰ القائمة", onClick = onOpenDrawer)
-            Text("مكتبتي (${library.size})", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        }
-        if (library.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("مكتبتك فارغة حالياً — أضف أعمالك المفضلة من صفحة التفاصيل", color = Color(0xFF9AA4B8))
+        NuvioFocusButton(text = "رجوع", icon = Icons.Default.ArrowBack, onClick = onBack)
+        Spacer(Modifier.height(16.dp))
+        if (p == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = NuvioGold)
             }
         } else {
+            Text(text = p.name, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            if (p.biography.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(text = p.biography, color = NuvioTextSecondary, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.height(16.dp))
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(136.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                columns = GridCells.Adaptive(minSize = 140.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                items(library, key = { it.id }) { item ->
-                    NuvioPosterCard(item = item, onClick = { onOpenDetails(item) })
+                items(p.credits, key = { "p_${it.id}" }) { item ->
+                    NuvioPosterCard(
+                        item = item,
+                        preferEnglish = settings.preferEnglishTitles,
+                        lowEndMode = settings.lowEndDeviceMode,
+                        onClick = onOpenDetails
+                    )
                 }
             }
         }
@@ -953,205 +1634,50 @@ fun NuvioLibraryScreen(
 }
 
 @Composable
-fun NuvioSettingsScreen(
-    vm: FilmrViewModel,
-    onOpenDrawer: () -> Unit
+fun NuvioCompanyScreen(
+    company: CompanyItem,
+    viewModel: FilmrViewModel,
+    onBack: () -> Unit,
+    onOpenDetails: (MediaItem) -> Unit
 ) {
-    val settings by vm.settings.collectAsState()
-    val addons by vm.addons.collectAsState()
-    val statusMsg by vm.addonStatusMsg.collectAsState()
-    var section by remember { mutableStateOf("services") }
-    var urlInput by remember { mutableStateOf("") }
-    var mdblistInput by remember { mutableStateOf(settings.mdblistApiKey) }
-    var animeSkipInput by remember { mutableStateOf(settings.animeSkipClientId) }
+    val settings by viewModel.settings.collectAsState()
+    var itemsList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var sortBy by remember { mutableStateOf("popularity.desc") }
 
-    Row(
+    LaunchedEffect(company.id, sortBy) {
+        itemsList = viewModel.discoverCompany(company.id, company.isNetwork, sortBy)
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(NuvioBg)
-            .padding(28.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp)
+            .padding(28.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .width(240.dp)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(14.dp))
-                .background(NuvioCardBg)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            NuvioChip(label = "☰ القائمة الرئيسية", onClick = onOpenDrawer)
-            Spacer(Modifier.height(6.dp))
-            Text("الإعدادات", color = NuvioGold, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-            Spacer(Modifier.height(6.dp))
-            NuvioChip(label = "الخدمات المرتبطة", selected = section == "services", onClick = { section = "services" })
-            NuvioChip(label = "الإضافات والمستودعات", selected = section == "addons", onClick = { section = "addons" })
-            NuvioChip(label = "المظهر والتشغيل", selected = section == "general", onClick = { section = "general" })
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            NuvioFocusButton(text = "رجوع", icon = Icons.Default.ArrowBack, onClick = onBack)
+            Text(text = company.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black)
         }
-
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(14.dp))
-                .background(NuvioCardBg)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NuvioChip("الأكثر رواجاً", sortBy == "popularity.desc") { sortBy = "popularity.desc" }
+            NuvioChip("الأعلى تقييماً", sortBy == "vote_average.desc") { sortBy = "vote_average.desc" }
+            NuvioChip("الأحدث", sortBy == "primary_release_date.desc") { sortBy = "primary_release_date.desc" }
+        }
+        Spacer(Modifier.height(16.dp))
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 140.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            if (section == "services") {
-                item {
-                    Text("إثراء بيانات TMDB", color = NuvioGold, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-                item {
-                    SettingsToggleRow("تفعيل تحسين TMDB", settings.tmdbEnabled) { v -> vm.updateSettings { it.copy(tmdbEnabled = v) } }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        NuvioChip("العربية (ar-SA)", selected = settings.tmdbLanguage == "ar-SA") {
-                            vm.updateSettings { it.copy(tmdbLanguage = "ar-SA") }
-                        }
-                        NuvioChip("English (en-US)", selected = settings.tmdbLanguage == "en-US") {
-                            vm.updateSettings { it.copy(tmdbLanguage = "en-US") }
-                        }
-                    }
-                }
-                item { SettingsToggleRow("الصور الفنية والشعارات (Artwork)", settings.tmdbArtwork) { v -> vm.updateSettings { it.copy(tmdbArtwork = v) } } }
-                item { SettingsToggleRow("المعلومات الأساسية والوصف", settings.tmdbBasicInfo) { v -> vm.updateSettings { it.copy(tmdbBasicInfo = v) } } }
-                item { SettingsToggleRow("طاقم العمل والمؤلف", settings.tmdbCast) { v -> vm.updateSettings { it.copy(tmdbCast = v) } } }
-                item { SettingsToggleRow("شركات الإنتاج", settings.tmdbCompanies) { v -> vm.updateSettings { it.copy(tmdbCompanies = v) } } }
-                item { SettingsToggleRow("القنوات والشبكات", settings.tmdbNetworks) { v -> vm.updateSettings { it.copy(tmdbNetworks = v) } } }
-                item { SettingsToggleRow("الحلقات والمواسم", settings.tmdbEpisodes) { v -> vm.updateSettings { it.copy(tmdbEpisodes = v) } } }
-                item { SettingsToggleRow("الإعلانات التشويقية", settings.tmdbTrailers) { v -> vm.updateSettings { it.copy(tmdbTrailers = v) } } }
-                item { SettingsToggleRow("الأعمال المقترحة", settings.tmdbRecommendations) { v -> vm.updateSettings { it.copy(tmdbRecommendations = v) } } }
-                item { SettingsToggleRow("سلاسل الأفلام (Collections)", settings.tmdbCollections) { v -> vm.updateSettings { it.copy(tmdbCollections = v) } } }
-
-                item {
-                    HorizontalDivider(color = Color(0x22FFFFFF))
-                    Text("تقييمات MDBList المتعددة", color = NuvioGold, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        NuvioWhiteTextField(
-                            value = mdblistInput,
-                            onValueChange = { mdblistInput = it },
-                            placeholder = "أدخل مفتاح MDBList API Key",
-                            modifier = Modifier.weight(1f)
-                        )
-                        NuvioChip("حفظ", selected = true) {
-                            vm.updateSettings { it.copy(mdblistApiKey = mdblistInput.trim()) }
-                        }
-                    }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NuvioChip("IMDb", selected = settings.mdblistImdb) { vm.updateSettings { it.copy(mdblistImdb = !it.mdblistImdb) } }
-                        NuvioChip("Rotten Tomatoes", selected = settings.mdblistRt) { vm.updateSettings { it.copy(mdblistRt = !it.mdblistRt) } }
-                        NuvioChip("Metacritic", selected = settings.mdblistMetacritic) { vm.updateSettings { it.copy(mdblistMetacritic = !it.mdblistMetacritic) } }
-                        NuvioChip("Letterboxd", selected = settings.mdblistLetterboxd) { vm.updateSettings { it.copy(mdblistLetterboxd = !it.mdblistLetterboxd) } }
-                        NuvioChip("MAL", selected = settings.mdblistMal) { vm.updateSettings { it.copy(mdblistMal = !it.mdblistMal) } }
-                    }
-                }
-
-                item {
-                    HorizontalDivider(color = Color(0x22FFFFFF))
-                    Text("تخطي شارات الأنمي (Anime-Skip)", color = NuvioGold, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        NuvioWhiteTextField(
-                            value = animeSkipInput,
-                            onValueChange = { animeSkipInput = it },
-                            placeholder = "أدخل Anime-Skip Client ID",
-                            modifier = Modifier.weight(1f)
-                        )
-                        NuvioChip("حفظ", selected = true) {
-                            vm.updateSettings { it.copy(animeSkipClientId = animeSkipInput.trim()) }
-                        }
-                    }
-                }
-            }
-
-            if (section == "addons") {
-                item {
-                    Text("إضافة مصدر Stremio أو مستودع CloudStream", color = NuvioGold, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        NuvioWhiteTextField(
-                            value = urlInput,
-                            onValueChange = { urlInput = it },
-                            placeholder = "ألصق رابط manifest.json أو repo.json هنا...",
-                            modifier = Modifier.weight(1f)
-                        )
-                        NuvioChip("+ Stremio", selected = true) {
-                            if (urlInput.isNotBlank()) {
-                                vm.addStremioAddon(urlInput)
-                                urlInput = ""
-                            }
-                        }
-                        NuvioChip("+ CloudStream", selected = false) {
-                            if (urlInput.isNotBlank()) {
-                                vm.importCloudStreamRepo(urlInput)
-                                urlInput = ""
-                            }
-                        }
-                    }
-                }
-                if (statusMsg.isNotBlank()) {
-                    item { Text(statusMsg, color = Color(0xFF4ADE80), fontSize = 13.sp, fontWeight = FontWeight.Bold) }
-                }
-                items(addons, key = { it.id }) { ad ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(NuvioSurface)
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("${ad.name} (${ad.type})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Text(ad.description, color = Color(0xFF9AA4B8), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            NuvioChip(if (ad.isEnabled) "مفعّل" else "معطّل", selected = ad.isEnabled) { vm.toggleAddon(ad) }
-                            NuvioChip("حذف", selected = false) { vm.deleteAddon(ad.id) }
-                        }
-                    }
-                }
-            }
-
-            if (section == "general") {
-                item {
-                    Text("المظهر والتشغيل", color = NuvioGold, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-                item { SettingsToggleRow("وضع AMOLED الأسود بالكامل", settings.amoledBlack) { v -> vm.updateSettings { it.copy(amoledBlack = v) } } }
-                item { SettingsToggleRow("تفضيل العناوين الإنجليزية", settings.preferEnglishTitles) { v -> vm.updateSettings { it.copy(preferEnglishTitles = v) } } }
-                item { SettingsToggleRow("إظهار قسم متابعة المشاهدة", settings.showContinueWatching) { v -> vm.updateSettings { it.copy(showContinueWatching = v) } } }
-                item { SettingsToggleRow("تشغيل الحلقة التالية تلقائياً", settings.autoPlayNext) { v -> vm.updateSettings { it.copy(autoPlayNext = v) } } }
+            items(itemsList, key = { "c_${it.id}" }) { item ->
+                NuvioPosterCard(
+                    item = item,
+                    preferEnglish = settings.preferEnglishTitles,
+                    lowEndMode = settings.lowEndDeviceMode,
+                    onClick = onOpenDetails
+                )
             }
         }
-    }
-}
-
-@Composable
-fun SettingsToggleRow(title: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (focused) Color(0xFF232B3B) else NuvioSurface)
-            .border(if (focused) 2.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
-            .clickable { onToggle(!checked) }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-        Switch(checked = checked, onCheckedChange = onToggle)
     }
 }

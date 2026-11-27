@@ -5,213 +5,226 @@ import androidx.room.PrimaryKey
 
 data class MediaItem(
     val id: String,
-    val imdbId: String = "",
-    val tmdbId: Int = 0,
-    val type: String = "movie",
+    val imdbId: String? = null,
+    val tmdbId: Int? = null,
+    val type: String = "movie", // movie, series, tv
     val titleAr: String = "",
     val titleEn: String = "",
-    val posterUrl: String = "",
-    val backdropUrl: String = "",
-    val logoUrl: String = "",
-    val overviewAr: String = "",
-    val overviewEn: String = "",
+    val customTitle: String? = null,
+    val posterUrl: String? = null,
+    val backdropUrl: String? = null,
+    val logoUrl: String? = null,
+    val overview: String = "",
     val year: String = "",
-    val rating: Double = 0.0,
-    val imdbRating: String = "",
-    val tmdbRating: String = "",
-    val rtRating: String = "",
-    val metacriticRating: String = "",
-    val letterboxdRating: String = "",
-    val malRating: String = "",
-    val genres: List<String> = emptyList(),
-    val network: String = "",
-    val networkId: Int = 0,
+    val releaseInfo: String = "",
     val runtimeMinutes: Int = 0,
-    val seasonsCount: Int = 1,
+    val seasonsCount: Int = 0,
+    val genres: List<String> = emptyList(),
     val episodes: List<EpisodeItem> = emptyList(),
     val cast: List<CastMember> = emptyList(),
     val companies: List<CompanyItem> = emptyList(),
+    val network: String? = null,
+    val networkId: Int? = null,
     val recommendations: List<MediaItem> = emptyList(),
-    val customPosterUrl: String = "",
-    val customBackdropUrl: String = "",
-    val customLogoUrl: String = "",
-    val customTitle: String = "",
-    val useEnglishTitle: Boolean = false,
-    val sourceAddon: String = ""
+    val imdbRating: String? = null,
+    val tmdbRating: String? = null,
+    val rtRating: String? = null,
+    val metacriticRating: String? = null,
+    val letterboxdRating: String? = null,
+    val malRating: String? = null,
+    val sourceAddonName: String? = null
 ) {
-    val displayTitle: String
-        get() = when {
-            customTitle.isNotBlank() -> customTitle
-            useEnglishTitle && titleEn.isNotBlank() -> titleEn
-            titleAr.isNotBlank() -> titleAr
-            else -> titleEn
+    fun displayTitle(preferEnglish: Boolean): String {
+        if (!customTitle.isNullOrBlank()) return customTitle
+        return if (preferEnglish) {
+            titleEn.ifBlank { titleAr }
+        } else {
+            titleAr.ifBlank { titleEn }
         }
-
-    val displayPoster: String get() = customPosterUrl.ifBlank { posterUrl }
-    val displayBackdrop: String get() = customBackdropUrl.ifBlank { backdropUrl.ifBlank { displayPoster } }
-    val displayLogo: String get() = customLogoUrl.ifBlank { logoUrl }
+    }
 }
+
+data class EpisodeItem(
+    val id: String,
+    val season: Int,
+    val episode: Int,
+    val title: String,
+    val overview: String = "",
+    val thumbnailUrl: String? = null,
+    val released: String = "",
+    val runtimeMinutes: Int = 0
+)
 
 data class CastMember(
     val id: Int,
     val name: String,
-    val character: String,
-    val profileUrl: String?
+    val character: String = "",
+    val profileUrl: String? = null
 )
 
 data class CompanyItem(
     val id: Int,
     val name: String,
-    val logoUrl: String?
+    val logoUrl: String? = null,
+    val isNetwork: Boolean = false
 )
 
 data class PersonDetails(
     val id: Int,
     val name: String,
-    val biography: String,
-    val birthday: String,
-    val placeOfBirth: String,
-    val profileUrl: String?,
-    val knownFor: List<MediaItem> = emptyList()
-)
-
-data class EpisodeItem(
-    val season: Int,
-    val episode: Int,
-    val title: String,
-    val overview: String,
-    val rating: Double,
-    val stillUrl: String,
-    val runtime: Int = 24
+    val biography: String = "",
+    val birthday: String = "",
+    val placeOfBirth: String = "",
+    val profileUrl: String? = null,
+    val credits: List<MediaItem> = emptyList()
 )
 
 data class AddonCatalogRow(
-    val addonId: String,
-    val addonName: String,
-    val catalogId: String,
+    val id: String,
     val title: String,
-    val lang: String,
+    val addonName: String,
+    val addonType: String = "stremio", // tmdb, stremio, cloudstream
     val items: List<MediaItem>
 )
 
 data class SubtitleTrack(
     val id: String,
-    val label: String,
-    val language: String,
     val url: String,
+    val lang: String,
+    val label: String,
     val addonName: String = ""
 )
 
 data class UnifiedStream(
     val id: String,
-    val name: String,
     val title: String,
-    val url: String,
-    val quality: String = "1080p",
-    val qualityScore: Int = 1080,
-    val addonName: String = "",
-    val sourceType: String = "stremio",
+    val description: String = "",
+    val url: String? = null,
+    val infoHash: String? = null,
+    val fileIdx: Int? = null,
+    val quality: String = "HD",
     val sizeText: String = "",
     val seeders: Int = 0,
     val isTorrent: Boolean = false,
+    val sourceEngine: String = "stremio", // stremio, cloudstream, torrent
+    val addonName: String = "Stream",
+    val addonUrl: String = "",
     val headers: Map<String, String> = emptyMap(),
     val subtitles: List<SubtitleTrack> = emptyList()
 )
 
-data class UserProfile(
-    val id: String,
-    val name: String,
-    val isKids: Boolean = false
+data class StremioAccountState(
+    val isLoggedIn: Boolean = false,
+    val email: String = "",
+    val authKey: String = "",
+    val userId: String = "",
+    val lastSyncTimestamp: Long = 0L,
+    val syncedAddonsCount: Int = 0,
+    val syncedLibraryCount: Int = 0,
+    val syncedHistoryCount: Int = 0
 )
 
 data class AppSettings(
+    // Performance & Low-End Device Optimization
+    val lowEndDeviceMode: Boolean = false,
+    val reduceAnimations: Boolean = false,
+    val maxConcurrentAddons: Int = 6,
+
+    // Appearance & Playback (Nuvio Style)
+    val amoledBlackMode: Boolean = false,
+    val preferEnglishTitles: Boolean = false,
+    val showContinueWatching: Boolean = true,
+    val autoPlayNextEpisode: Boolean = true,
+    val showHeroBackdrop: Boolean = true,
+
+    // TMDB Enrichment
     val tmdbEnabled: Boolean = true,
-    val tmdbApiKey: String = "439c478a771f35c05022d9feabcca01c",
+    val tmdbApiKey: String = "d899771968f83d3981b25f89695a4242",
     val tmdbLanguage: String = "ar-SA",
     val tmdbArtwork: Boolean = true,
-    val tmdbBasicInfo: Boolean = true,
     val tmdbCast: Boolean = true,
     val tmdbCompanies: Boolean = true,
-    val tmdbNetworks: Boolean = true,
-    val tmdbEpisodes: Boolean = true,
-    val tmdbTrailers: Boolean = true,
     val tmdbRecommendations: Boolean = true,
-    val tmdbCollections: Boolean = true,
+
+    // MDBList Multi-Ratings
     val mdblistApiKey: String = "",
-    val mdblistImdb: Boolean = true,
-    val mdblistRt: Boolean = true,
-    val mdblistMetacritic: Boolean = true,
-    val mdblistLetterboxd: Boolean = true,
-    val mdblistMal: Boolean = true,
+    val showImdbRating: Boolean = true,
+    val showTmdbRating: Boolean = true,
+    val showRtRating: Boolean = true,
+    val showMetacriticRating: Boolean = true,
+    val showLetterboxdRating: Boolean = true,
+    val showMalRating: Boolean = true,
+
+    // Anime-Skip
+    val animeSkipEnabled: Boolean = false,
     val animeSkipClientId: String = "",
-    val animeSkipEnabled: Boolean = true,
-    val preferEnglishTitles: Boolean = false,
-    val amoledBlack: Boolean = false,
-    val showContinueWatching: Boolean = true,
-    val autoPlayNext: Boolean = true,
-    val subtitleSizeSp: Float = 22f,
+
+    // Subtitle Studio Styling
+    val subtitleFontSizeSp: Float = 22f,
     val subtitleBold: Boolean = true,
-    val subtitleColorHex: Long = 0xFFFFFFFF,
+    val subtitleTextColorHex: Long = 0xFFFFFFFF,
     val subtitleBgOpacity: Float = 0.55f,
-    val subtitleOutline: Boolean = true,
-    val subtitleBottomPaddingDp: Float = 36f
+    val subtitleEdgeOutline: Boolean = true,
+    val subtitleBottomPaddingDp: Int = 44
 )
 
 @Entity(tableName = "addons")
 data class AddonEntity(
     @PrimaryKey val id: String,
     val name: String,
-    val description: String,
-    val repoUrl: String = "",
-    val manifestUrl: String = "",
-    val logoUrl: String = "",
-    val type: String = "stremio",
-    val isEnabled: Boolean = true,
-    val orderIndex: Int = 0
+    val description: String = "",
+    val manifestUrl: String,
+    val transportUrl: String,
+    val version: String = "1.0.0",
+    val iconUrl: String? = null,
+    val sourceType: String = "stremio", // "stremio" or "cloudstream"
+    val isFromStremioAccount: Boolean = false,
+    val enabled: Boolean = true,
+    val orderIndex: Int = 0,
+    val rawManifestJson: String = ""
 )
 
 @Entity(tableName = "watch_progress")
 data class WatchProgressEntity(
-    @PrimaryKey val key: String,
+    @PrimaryKey val key: String, // mediaId or mediaId:S:E
     val mediaId: String,
-    val imdbId: String,
-    val type: String,
+    val imdbId: String? = null,
+    val mediaType: String = "movie",
     val title: String,
-    val posterUrl: String,
-    val backdropUrl: String,
-    val season: Int,
-    val episode: Int,
-    val positionMs: Long,
-    val durationMs: Long,
-    val streamUrl: String = "",
-    val addonName: String = "",
+    val posterUrl: String? = null,
+    val backdropUrl: String? = null,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeTitle: String = "",
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
     val updatedAt: Long = System.currentTimeMillis()
-)
+) {
+    val progressFraction: Float
+        get() = if (durationMs > 0L) (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+}
 
 @Entity(tableName = "watch_history")
 data class WatchHistoryEntity(
-    @PrimaryKey val key: String,
-    val mediaId: String,
+    @PrimaryKey val mediaId: String,
+    val mediaType: String = "movie",
     val title: String,
-    val posterUrl: String,
-    val type: String,
-    val season: Int = 0,
-    val episode: Int = 0,
+    val posterUrl: String? = null,
     val watchedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "library")
 data class LibraryEntity(
-    @PrimaryKey val id: String,
-    val imdbId: String,
-    val tmdbId: Int,
-    val type: String,
-    val titleAr: String,
-    val titleEn: String,
-    val posterUrl: String,
-    val backdropUrl: String,
-    val rating: Double,
-    val year: String,
+    @PrimaryKey val mediaId: String,
+    val imdbId: String? = null,
+    val mediaType: String = "movie",
+    val titleAr: String = "",
+    val titleEn: String = "",
+    val posterUrl: String? = null,
+    val backdropUrl: String? = null,
+    val year: String = "",
+    val rating: String? = null,
+    val syncedFromStremio: Boolean = false,
     val addedAt: Long = System.currentTimeMillis()
 )
 
@@ -219,12 +232,4 @@ data class LibraryEntity(
 data class SearchHistoryEntity(
     @PrimaryKey val query: String,
     val searchedAt: Long = System.currentTimeMillis()
-)
-
-@Entity(tableName = "user_session")
-data class UserSessionEntity(
-    @PrimaryKey val id: Int = 1,
-    val email: String,
-    val authKey: String,
-    val activeProfileId: String = "default"
 )
