@@ -142,7 +142,7 @@ class StremioAddonService {
                             else -> ""
                         }
                         if (finalUrl.isBlank()) continue
-                        val name = s.optString("name", addon.name).replace("\n", " ").replace("\r", " ")
+                        val name = s.optString("name", addon.name).replace("\\n", " ").replace("\\n", " ")
                         val title = s.optString("title", s.optString("description", "رابط مشاهدة"))
                         val combined = "$name $title"
                         val q = when {
