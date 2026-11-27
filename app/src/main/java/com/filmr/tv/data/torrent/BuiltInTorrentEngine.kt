@@ -89,61 +89,48 @@ class BuiltInTorrentEngine(private val context: Context) {
             try {
                 val sm = ensureSession(lowEndMode)
                 val enrichedMagnet = appendPublicTrackers(magnetUri)
-                val sha1 = extractInfoHashSha1(magnetUri)
 
-                val infoBytes = withTimeoutOrNull(25_000L) {
-                    sm.fetchMagnet(enrichedMagnet, 25, torrentCacheDir)
+                val infoBytes = withTimeoutOrNull(35_000L) {
+                    sm.fetchMagnet(enrichedMagnet, 35, torrentCacheDir)
                 }
 
-                var targetSha1 = sha1
-                if (infoBytes != null) {
-                    val ti = TorrentInfo(infoBytes)
-                    targetSha1 = ti.infoHash()
-                    sm.download(ti, torrentCacheDir)
-                } else {
-                    sm.download(enrichedMagnet, torrentCacheDir)
+                if (infoBytes == null || infoBytes.isEmpty()) {
+                    _status.value = TorrentStreamStatus(
+                        isActive = false,
+                        error = "انتهت مهلة جلب بيانات التورنت (لا يوجد سيدرز كافٍ حالياً)"
+                    )
+                    return@launch
                 }
+
+                val torrentInfo = TorrentInfo(infoBytes)
+                if (!torrentInfo.isValid) {
+                    _status.value = TorrentStreamStatus(
+                        isActive = false,
+                        error = "ملف التورنت غير صالح أو تالف"
+                    )
+                    return@launch
+                }
+
+                val targetSha1: Sha1Hash = torrentInfo.infoHash()
+                sm.download(torrentInfo, torrentCacheDir)
 
                 var handle: TorrentHandle? = null
-                if (targetSha1 != null) {
-                    for (i in 0..35) {
-                        handle = sm.find(targetSha1)
-                        if (handle != null && handle.isValid) break
-                        delay(350L)
-                    }
+                for (i in 0..35) {
+                    handle = sm.find(targetSha1)
+                    if (handle != null && handle.isValid) break
+                    delay(300L)
                 }
 
                 if (handle == null || !handle.isValid) {
                     _status.value = TorrentStreamStatus(
                         isActive = false,
-                        error = "تعذر العثور على مصادر نشطة لهذا التورنت"
+                        error = "تعذر بدء جلسة التحميل لهذا التورنت"
                     )
                     return@launch
                 }
 
                 currentHandle = handle
                 handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-
-                var torrentInfo: TorrentInfo? = handle.torrentFile()
-                var metaWait = 0
-                while ((torrentInfo == null || !torrentInfo.isValid) && metaWait < 60 && isActive) {
-                    val st = handle.status()
-                    _status.value = _status.value.copy(
-                        statusText = "جاري جلب معلومات الملفات (${st.numPeers()} متصل)...",
-                        peersCount = st.numPeers()
-                    )
-                    delay(500L)
-                    torrentInfo = handle.torrentFile()
-                    metaWait++
-                }
-
-                if (torrentInfo == null || !torrentInfo.isValid) {
-                    _status.value = TorrentStreamStatus(
-                        isActive = false,
-                        error = "انتهت مهلة جلب بيانات التورنت (لا يوجد سيدرز كافٍ)"
-                    )
-                    return@launch
-                }
 
                 val numFiles = torrentInfo.numFiles()
                 val files = torrentInfo.files()
@@ -402,39 +389,6 @@ class BuiltInTorrentEngine(private val context: Context) {
                 torrentCacheDir.listFiles()?.forEach { it.deleteRecursively() }
             }
         }
-    }
-
-    private fun extractInfoHashSha1(magnet: String): Sha1Hash? {
-        return runCatching {
-            val hexMatch = Regex("btih:([a-fA-F0-9]{40})").find(magnet)?.groupValues?.get(1)
-            if (hexMatch != null) return Sha1Hash(hexMatch)
-
-            val b32Match = Regex("btih:([a-zA-Z2-7]{32})").find(magnet)?.groupValues?.get(1)
-            if (b32Match != null) {
-                val hex = base32ToHex(b32Match.uppercase())
-                if (hex.length == 40) return Sha1Hash(hex)
-            }
-            null
-        }.getOrNull()
-    }
-
-    private fun base32ToHex(base32: String): String {
-        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-        var buffer = 0
-        var bitsLeft = 0
-        val out = StringBuilder()
-        for (ch in base32) {
-            val valIdx = alphabet.indexOf(ch)
-            if (valIdx < 0) continue
-            buffer = (buffer shl 5) or valIdx
-            bitsLeft += 5
-            if (bitsLeft >= 8) {
-                val byteVal = (buffer shr (bitsLeft - 8)) and 0xFF
-                out.append(String.format("%02x", byteVal))
-                bitsLeft -= 8
-            }
-        }
-        return out.toString()
     }
 
     private fun appendPublicTrackers(magnet: String): String {
