@@ -76,7 +76,8 @@ class CloudStreamRepoService {
         val out = mutableListOf<AddonEntity>()
         for (i in 0 until arr.length()) {
             val p = arr.optJSONObject(i) ?: continue
-            val name = p.optString("name").ifBlank { continue }
+            val name = p.optString("name")
+            if (name.isBlank()) continue
             val internal = p.optString("internalName", name)
             val desc = p.optString("description", repoName)
             val icon = p.optString("iconUrl")

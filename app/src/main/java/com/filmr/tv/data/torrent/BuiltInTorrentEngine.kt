@@ -86,7 +86,7 @@ class BuiltInTorrentEngine(private val context: Context) {
                 }
 
                 val priorities = Array(filesCount) { idx ->
-                    if (idx == bestIndex) Priority.SEVEN else Priority.IGNORE
+                    if (idx == bestIndex) Priority.TOP_PRIORITY else Priority.IGNORE
                 }
                 handle.prioritizeFiles(priorities)
                 handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)

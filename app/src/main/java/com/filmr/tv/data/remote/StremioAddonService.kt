@@ -126,6 +126,8 @@ class StremioAddonService {
         if (rawId.isBlank()) return@withContext emptyList()
         val streamId = if (stremioType == "series") "$rawId:$season:$episode" else rawId
         val encodedId = URLEncoder.encode(streamId, "UTF-8")
+        val sizeRegex = Regex("""(\d+(?:\.\d+)?\s*(?:GB|MB))""", RegexOption.IGNORE_CASE)
+        val seedRegex = Regex("""seeders?:\s*(\d+)""", RegexOption.IGNORE_CASE)
 
         active.map { addon ->
             async {
@@ -161,10 +163,9 @@ class StremioAddonService {
                             "720p" -> 720
                             else -> 480
                         }
-                        val sizeMatch = Regex("(\d+(?:\.\d+)?\s*(?:GB|MB))", RegexOption.IGNORE_CASE).find(combined)
-                        val seedMatch = Regex("👤\s*(\d+)|seeders?:\s*(\d+)", RegexOption.IGNORE_CASE).find(combined)
-                        val seeders = (seedMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
-                            ?: seedMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0)
+                        val sizeMatch = sizeRegex.find(combined)
+                        val seedMatch = seedRegex.find(combined)
+                        val seeders = seedMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                         val isTorrent = finalUrl.startsWith("magnet:", true) || infoHash.isNotBlank()
 
                         out.add(
