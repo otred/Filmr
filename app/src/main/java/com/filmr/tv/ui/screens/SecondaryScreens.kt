@@ -92,7 +92,7 @@ fun SearchScreen(
             }
         } else if (results.isEmpty() && query.isNotBlank()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("لا توجد نتائج مطابقة لـ "$query"", color = TextSecondary, fontSize = 16.sp)
+                    Text("لا توجد نتائج مطابقة لـ $query", color = TextSecondary, fontSize = 16.sp)
             }
         } else {
             LazyVerticalGrid(
