@@ -1,6 +1,4 @@
-package com.filmr.tv.data.torrent
-
-import android.content.Context
+package com.filmr.tv.data.torrentimport android.content.Context
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,9 +13,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.net.InetAddress
 import java.net.ServerSocket
-import java.net.Socket
-
-data class TorrentEngineState(
+import java.net.Socketdata class TorrentEngineState(
     val isActive: Boolean = false,
     val statusText: String = "",
     val downloadSpeedKbps: Int = 0,
@@ -25,19 +21,13 @@ data class TorrentEngineState(
     val progressPercent: Int = 0,
     val localStreamUrl: String? = null,
     val error: String? = null
-)
-
-object BuiltInTorrentEngine {
+)object BuiltInTorrentEngine {
     private var session: SessionManager? = null
     private var activeHandle: TorrentHandle? = null
     private var proxySocket: ServerSocket? = null
     private var engineJob: Job? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    private val _state = MutableStateFlow(TorrentEngineState())
-    val state: StateFlow<TorrentEngineState> = _state.asStateFlow()
-
-    @Synchronized
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)    private val _state = MutableStateFlow(TorrentEngineState())
+    val state: StateFlow<TorrentEngineState> = _state.asStateFlow()    @Synchronized
     private fun ensureSession(): SessionManager {
         val existing = session
         if (existing != null && existing.isRunning) return existing
@@ -45,33 +35,25 @@ object BuiltInTorrentEngine {
             start()
             session = this
         }
-    }
-
-    fun startMagnet(context: Context, magnetUri: String) {
+    }    fun startMagnet(context: Context, magnetUri: String) {
         stopCurrent()
         _state.value = TorrentEngineState(
             isActive = true,
             statusText = "جاري الاتصال بشبكة التورنت وجلب البيانات..."
-        )
-
-        engineJob = scope.launch {
+        )        engineJob = scope.launch {
             try {
                 val sm = ensureSession()
                 val cacheDir = File(context.cacheDir, "filmr_torrents").apply {
                     if (exists()) deleteRecursively()
                     mkdirs()
-                }
-
-                val metaBytes = sm.fetchMagnet(magnetUri, 35, cacheDir)
+                }                val metaBytes = sm.fetchMagnet(magnetUri, 35, cacheDir)
                 if (metaBytes == null || metaBytes.isEmpty()) {
                     _state.value = TorrentEngineState(
                         isActive = false,
                         error = "تعذر جلب بيانات التورنت (لا يوجد سيدرز نشطون حالياً)"
                     )
                     return@launch
-                }
-
-                val ti = TorrentInfo.bdecode(metaBytes)
+                }                val ti = TorrentInfo.bdecode(metaBytes)
                 val numFiles = ti.numFiles()
                 val files = ti.files()
                 var bestIndex = 0
@@ -89,9 +71,7 @@ object BuiltInTorrentEngine {
                 if (bestSize <= 0L && numFiles > 0) {
                     bestIndex = 0
                     bestSize = files.fileSize(0)
-                }
-
-                sm.download(ti, cacheDir)
+                }                sm.download(ti, cacheDir)
                 delay(400)
                 val handle = sm.find(ti.infoHash())
                 if (handle == null) {
@@ -99,59 +79,41 @@ object BuiltInTorrentEngine {
                     return@launch
                 }
                 activeHandle = handle
-                handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-
-                val filePrios = Array(numFiles) { idx ->
+                handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)                val filePrios = Array(numFiles) { idx ->
                     if (idx == bestIndex) Priority.TOP_PRIORITY else Priority.IGNORE
                 }
-                handle.prioritizeFiles(filePrios)
-
-                val firstPiece = ti.mapFile(bestIndex, 0, 1).piece()
+                handle.prioritizeFiles(filePrios)                val firstPiece = ti.mapFile(bestIndex, 0, 1).piece()
                 val lastPiece = ti.mapFile(bestIndex, (bestSize - 1).coerceAtLeast(0), 1).piece()
                 for (p in firstPiece..(firstPiece + 18).coerceAtMost(lastPiece)) {
                     handle.piecePriority(p, Priority.TOP_PRIORITY)
                 }
                 for (p in (lastPiece - 4).coerceAtLeast(firstPiece)..lastPiece) {
                     handle.piecePriority(p, Priority.TOP_PRIORITY)
-                }
-
-                val targetFile = File(cacheDir, files.filePath(bestIndex))
-                val minReadyBytes = (6L * 1024L * 1024L).coerceAtMost(bestSize / 4)
-
-                var waitedMs = 0
+                }                val targetFile = File(cacheDir, files.filePath(bestIndex))
+                val minReadyBytes = (6L * 1024L * 1024L).coerceAtMost(bestSize / 4)                var waitedMs = 0
                 while (isActive && waitedMs < 45_000) {
                     val st = handle.status()
                     val speedKb = st.downloadPayloadRate() / 1024
                     val peers = st.numPeers()
                     val pct = (st.progress() * 100).toInt()
-                    val currentLen = if (targetFile.exists()) targetFile.length() else 0L
-
-                    _state.value = _state.value.copy(
+                    val currentLen = if (targetFile.exists()) targetFile.length() else 0L                    _state.value = _state.value.copy(
                         statusText = "جاري تجهيز البث المباشر... ($speedKb KB/s • $peers متصل)",
                         downloadSpeedKbps = speedKb,
                         peers = peers,
                         progressPercent = pct
-                    )
-
-                    if (currentLen >= minReadyBytes && handle.havePiece(firstPiece)) {
+                    )                    if (currentLen >= minReadyBytes && handle.havePiece(firstPiece)) {
                         break
                     }
                     delay(500)
                     waitedMs += 500
-                }
-
-                val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+                }                val server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
                 proxySocket = server
                 val port = server.localPort
                 val ext = targetFile.extension.ifBlank { "mkv" }
-                val streamUrl = "http://127.0.0.1:$port/stream.$ext"
-
-                _state.value = _state.value.copy(
+                val streamUrl = "http://127.0.0.1:$port/stream.$ext"                _state.value = _state.value.copy(
                     statusText = "جاهز للتشغيل",
                     localStreamUrl = streamUrl
-                )
-
-                launch {
+                )                launch {
                     while (isActive && !server.isClosed) {
                         val client = try { server.accept() } catch (_: Exception) { break }
                         launch { serveClient(client, targetFile, bestSize, handle, ti, bestIndex) }
@@ -166,9 +128,7 @@ object BuiltInTorrentEngine {
                 }
             }
         }
-    }
-
-    private suspend fun serveClient(
+    }    private suspend fun serveClient(
         socket: Socket,
         file: File,
         totalSize: Long,
@@ -187,9 +147,7 @@ object BuiltInTorrentEngine {
                     if (line.startsWith("Range:", ignoreCase = true)) {
                         rangeHeader = line.substringAfter(":").trim()
                     }
-                }
-
-                var start = 0L
+                }                var start = 0L
                 var end = totalSize - 1
                 var isPartial = false
                 if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
@@ -201,48 +159,28 @@ object BuiltInTorrentEngine {
                     }
                 }
                 if (start >= totalSize) start = 0L
-                if (end >= totalSize) end = totalSize - 1
-
-                val reqPiece = ti.mapFile(fileIndex, start, 1).piece()
+                if (end >= totalSize) end = totalSize - 1                val reqPiece = ti.mapFile(fileIndex, start, 1).piece()
                 val maxPiece = ti.mapFile(fileIndex, (totalSize - 1).coerceAtLeast(0), 1).piece()
                 for (p in reqPiece..(reqPiece + 12).coerceAtMost(maxPiece)) {
                     try { handle.piecePriority(p, Priority.TOP_PRIORITY) } catch (_: Exception) {}
-                }
-
-                val out = BufferedOutputStream(s.getOutputStream())
+                }                val out = BufferedOutputStream(s.getOutputStream())
                 val contentLength = (end - start + 1).coerceAtLeast(0)
-                val mime = if (file.name.endsWith(".mp4", true)) "video/mp4" else "video/x-matroska"
-
-                if (isPartial) {
-                    out.write("HTTP/1.1 206 Partial Content
-".toByteArray())
-                    out.write("Content-Range: bytes $start-$end/$totalSize
-".toByteArray())
+                val mime = if (file.name.endsWith(".mp4", true)) "video/mp4" else "video/x-matroska"                if (isPartial) {
+                    out.write("HTTP/1.1 206 Partial Content\r\n".toByteArray())
+                    out.write("Content-Range: bytes $start-$end/$totalSize\r\n".toByteArray())
                 } else {
-                    out.write("HTTP/1.1 200 OK
-".toByteArray())
+                    out.write("HTTP/1.1 200 OK\r\n".toByteArray())
                 }
-                out.write("Content-Type: $mime
-".toByteArray())
-                out.write("Content-Length: $contentLength
-".toByteArray())
-                out.write("Accept-Ranges: bytes
-".toByteArray())
-                out.write("Connection: close
-
-".toByteArray())
-                out.flush()
-
-                if (requestLine.startsWith("HEAD")) return@use
-
-                var waitCount = 0
+                out.write("Content-Type: $mime\r\n".toByteArray())
+                out.write("Content-Length: $contentLength\r\n".toByteArray())
+                out.write("Accept-Ranges: bytes\r\n".toByteArray())
+                out.write("Connection: close\r\n\r\n".toByteArray())
+                out.flush()                if (requestLine.startsWith("HEAD")) return@use                var waitCount = 0
                 while ((!file.exists() || !handle.havePiece(reqPiece)) && waitCount < 80) {
                     delay(200)
                     waitCount++
                 }
-                if (!file.exists()) return@use
-
-                RandomAccessFile(file, "r").use { raf ->
+                if (!file.exists()) return@use                RandomAccessFile(file, "r").use { raf ->
                     var pos = start
                     val buf = ByteArray(64 * 1024)
                     while (pos <= end) {
@@ -269,9 +207,7 @@ object BuiltInTorrentEngine {
                 }
             }
         } catch (_: Exception) {}
-    }
-
-    fun stopCurrent() {
+    }    fun stopCurrent() {
         engineJob?.cancel()
         try { proxySocket?.close() } catch (_: Exception) {}
         proxySocket = null
