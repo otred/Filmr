@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
+import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
 import java.io.File
@@ -28,7 +29,6 @@ class BuiltInTorrentEngine(private val context: Context) {
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
     private var monitorJob: Job? = null
-    private var activeVideoFile: File? = null
 
     private val _state = MutableStateFlow(TorrentStreamState())
     val state: StateFlow<TorrentStreamState> = _state
@@ -47,7 +47,7 @@ class BuiltInTorrentEngine(private val context: Context) {
                 session = mgr
                 mgr.start()
 
-                _state.value = _state.value.copy(statusText = "جاري جلب بيانات التورنت (Metadata)...")
+                _state.value = _state.value.copy(statusText = "جاري جلب بيانات التورنت...")
                 val metadataBytes = mgr.fetchMagnet(magnetUri, 30, baseDir)
                 if (metadataBytes == null || metadataBytes.isEmpty()) {
                     _state.value = TorrentStreamState(error = "تعذر العثور على مصادر نشطة لهذا التورنت")
@@ -89,11 +89,9 @@ class BuiltInTorrentEngine(private val context: Context) {
                     if (idx == bestIndex) Priority.SEVEN else Priority.IGNORE
                 }
                 handle.prioritizeFiles(priorities)
-                handle.setSequentialDownload(true)
+                handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
 
                 val targetFile = File(baseDir, torrentInfo.files().filePath(bestIndex))
-                activeVideoFile = targetFile
-
                 val port = startLocalHttpServer(targetFile, bestSize)
                 val streamUrl = "http://127.0.0.1:$port/video.mp4"
                 var announcedReady = false
@@ -101,7 +99,7 @@ class BuiltInTorrentEngine(private val context: Context) {
                 while (isActive) {
                     val st = handle.status()
                     val prog = (st.progress() * 100f).toInt().coerceIn(0, 100)
-                    val speedKb = (st.downloadPayloadRate() / 1024).coerceAtLeast(0)
+                    val speedKb = (st.downloadPayloadRate() / 1024L).toInt().coerceAtLeast(0)
                     val peersCount = st.numPeers()
                     val existingBytes = if (targetFile.exists()) targetFile.length() else 0L
 
@@ -189,17 +187,18 @@ class BuiltInTorrentEngine(private val context: Context) {
             }
 
             val contentLength = (end - start + 1).coerceAtLeast(0L)
+            val crlf = "${13.toChar()}${10.toChar()}"
             val headers = buildString {
                 if (rangeHeader != null) {
-                    append("HTTP/1.1 206 Partial Content\r\n")
-                    append("Content-Range: bytes $start-$end/$fileLen\r\n")
+                    append("HTTP/1.1 206 Partial Content$crlf")
+                    append("Content-Range: bytes $start-$end/$fileLen$crlf")
                 } else {
-                    append("HTTP/1.1 200 OK\r\n")
+                    append("HTTP/1.1 200 OK$crlf")
                 }
-                append("Content-Type: video/mp4\r\n")
-                append("Accept-Ranges: bytes\r\n")
-                append("Content-Length: $contentLength\r\n")
-                append("Connection: close\r\n\r\n")
+                append("Content-Type: video/mp4$crlf")
+                append("Accept-Ranges: bytes$crlf")
+                append("Content-Length: $contentLength$crlf")
+                append("Connection: close$crlf$crlf")
             }
             out.write(headers.toByteArray(Charsets.UTF_8))
             out.flush()
