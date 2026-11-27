@@ -17,7 +17,7 @@ class CloudStreamRepoService {
         .followRedirects(true)
         .build()
 
-    private fun fetchText(url: String): String? = try {
+    private fun fetchText(url: String): String? { return try {
         val clean = url.trim().split("\\s+".toRegex()).firstOrNull { it.startsWith("http") } ?: return null
         val req = Request.Builder()
             .url(clean)
@@ -26,7 +26,7 @@ class CloudStreamRepoService {
         client.newCall(req).execute().use { res ->
             if (!res.isSuccessful) null else res.body?.string()
         }
-    } catch (_: Exception) { null }
+    } catch (_: Exception) { null } }
 
     suspend fun parseRepository(rawRepoUrl: String): List<AddonEntity> = withContext(Dispatchers.IO) {
         val cleanUrl = rawRepoUrl.trim().split("\\s+".toRegex()).firstOrNull { it.startsWith("http") } ?: return@withContext emptyList()

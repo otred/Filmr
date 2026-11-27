@@ -2,146 +2,82 @@ package com.filmr.tv.data.local
 
 import android.content.Context
 import androidx.room.*
+import com.filmr.tv.domain.model.*
 import kotlinx.coroutines.flow.Flow
-
-@Entity(tableName = "library_items")
-data class LibraryEntity(
-    @PrimaryKey val mediaId: String,
-    val imdbId: String?,
-    val tmdbId: Int?,
-    val type: String,
-    val title: String,
-    val arabicTitle: String,
-    val originalTitle: String,
-    val posterUrl: String?,
-    val backdropUrl: String?,
-    val logoUrl: String?,
-    val year: String,
-    val ratingImdb: String?,
-    val addedAt: Long = System.currentTimeMillis()
-)
-
-@Entity(tableName = "continue_watching")
-data class ContinueWatchingEntity(
-    @PrimaryKey val mediaId: String,
-    val imdbId: String?,
-    val tmdbId: Int?,
-    val type: String,
-    val title: String,
-    val backdropUrl: String?,
-    val posterUrl: String?,
-    val logoUrl: String?,
-    val season: Int,
-    val episode: Int,
-    val episodeTitle: String,
-    val positionMs: Long,
-    val durationMs: Long,
-    val updatedAt: Long = System.currentTimeMillis()
-)
-
-@Entity(tableName = "media_overrides")
-data class MediaOverrideEntity(
-    @PrimaryKey val mediaId: String,
-    val customPosterUrl: String? = null,
-    val customBackdropUrl: String? = null,
-    val customTitle: String? = null,
-    val isWatched: Boolean = false
-)
-
-@Entity(tableName = "stremio_addons")
-data class StremioAddonEntity(
-    @PrimaryKey val id: String,
-    val name: String,
-    val version: String,
-    val description: String,
-    val manifestUrl: String,
-    val baseUrl: String,
-    val iconUrl: String?,
-    val typesJson: String,
-    val resourcesJson: String,
-    val catalogsJson: String,
-    val enabled: Boolean = true,
-    val orderIndex: Int = 0
-)
-
-@Entity(tableName = "cloudstream_repos")
-data class CloudStreamRepoEntity(
-    @PrimaryKey val id: String,
-    val name: String,
-    val url: String,
-    val description: String,
-    val pluginsJson: String,
-    val enabled: Boolean = true
-)
 
 @Dao
 interface FilmrDao {
-    // Library
-    @Query("SELECT * FROM library_items ORDER BY addedAt DESC")
-    fun observeLibrary(): Flow<List<LibraryEntity>>
+    @Query("SELECT * FROM addons ORDER BY orderIndex ASC")
+    fun observeAddons(): Flow<List<AddonEntity>>
+
+    @Query("SELECT * FROM addons WHERE isEnabled = 1 ORDER BY orderIndex ASC")
+    suspend fun getEnabledAddons(): List<AddonEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertLibrary(item: LibraryEntity)
+    suspend fun upsertAddon(addon: AddonEntity)
 
-    @Query("DELETE FROM library_items WHERE mediaId = :mediaId")
-    suspend fun removeLibrary(mediaId: String)
-
-    @Query("SELECT EXISTS(SELECT 1 FROM library_items WHERE mediaId = :mediaId)")
-    suspend fun isInLibrary(mediaId: String): Boolean
-
-    // Continue Watching
-    @Query("SELECT * FROM continue_watching ORDER BY updatedAt DESC LIMIT 25")
-    fun observeContinueWatching(): Flow<List<ContinueWatchingEntity>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertContinueWatching(item: ContinueWatchingEntity)
-
-    @Query("DELETE FROM continue_watching WHERE mediaId = :mediaId")
-    suspend fun deleteContinueWatching(mediaId: String)
-
-    // Custom Poster / Backdrop / Title / Watched Overrides
-    @Query("SELECT * FROM media_overrides")
-    fun observeOverrides(): Flow<List<MediaOverrideEntity>>
-
-    @Query("SELECT * FROM media_overrides WHERE mediaId = :mediaId LIMIT 1")
-    suspend fun getOverride(mediaId: String): MediaOverrideEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertOverride(override: MediaOverrideEntity)
-
-    // Stremio Addons
-    @Query("SELECT * FROM stremio_addons ORDER BY orderIndex ASC")
-    fun observeAddons(): Flow<List<StremioAddonEntity>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAddon(addon: StremioAddonEntity)
-
-    @Query("DELETE FROM stremio_addons WHERE id = :id")
+    @Query("DELETE FROM addons WHERE id = :id")
     suspend fun deleteAddon(id: String)
 
-    @Query("DELETE FROM stremio_addons")
-    suspend fun clearAddons()
-
-    // CloudStream Repos
-    @Query("SELECT * FROM cloudstream_repos")
-    fun observeCloudStreamRepos(): Flow<List<CloudStreamRepoEntity>>
+    @Query("SELECT * FROM watch_progress ORDER BY updatedAt DESC")
+    fun observeProgress(): Flow<List<WatchProgressEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertCloudStreamRepo(repo: CloudStreamRepoEntity)
+    suspend fun upsertProgress(progress: WatchProgressEntity)
 
-    @Query("DELETE FROM cloudstream_repos WHERE id = :id")
-    suspend fun deleteCloudStreamRepo(id: String)
+    @Query("DELETE FROM watch_progress WHERE `key` = :key")
+    suspend fun deleteProgress(key: String)
+
+    @Query("SELECT * FROM watch_history ORDER BY watchedAt DESC")
+    fun observeHistory(): Flow<List<WatchHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertHistory(history: WatchHistoryEntity)
+
+    @Query("SELECT * FROM library ORDER BY addedAt DESC")
+    fun observeLibrary(): Flow<List<LibraryItemEntity>>
+
+    @Query("SELECT * FROM library")
+    suspend fun getAllLibrary(): List<LibraryItemEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertLibraryItem(item: LibraryItemEntity)
+
+    @Query("DELETE FROM library WHERE id = :id")
+    suspend fun deleteLibraryItem(id: String)
+
+    @Query("SELECT * FROM search_history ORDER BY searchedAt DESC LIMIT 12")
+    fun observeSearchHistory(): Flow<List<SearchHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSearchQuery(entry: SearchHistoryEntity)
+
+    @Query("DELETE FROM search_history WHERE query = :query")
+    suspend fun deleteSearchQuery(query: String)
+
+    @Query("DELETE FROM search_history")
+    suspend fun clearSearchHistory()
+
+    @Query("SELECT * FROM user_session WHERE id = 1 LIMIT 1")
+    suspend fun getSession(): UserSessionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveSession(session: UserSessionEntity)
+
+    @Query("DELETE FROM user_session")
+    suspend fun clearSession()
 }
 
 @Database(
     entities = [
-        LibraryEntity::class,
-        ContinueWatchingEntity::class,
-        MediaOverrideEntity::class,
-        StremioAddonEntity::class,
-        CloudStreamRepoEntity::class
+        AddonEntity::class,
+        WatchProgressEntity::class,
+        WatchHistoryEntity::class,
+        LibraryItemEntity::class,
+        SearchHistoryEntity::class,
+        UserSessionEntity::class
     ],
-    version = 1,
+    version = 4,
     exportSchema = false
 )
 abstract class FilmrDatabase : RoomDatabase() {
@@ -149,15 +85,12 @@ abstract class FilmrDatabase : RoomDatabase() {
 
     companion object {
         @Volatile private var INSTANCE: FilmrDatabase? = null
-
-        fun getInstance(context: Context): FilmrDatabase {
-            return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    FilmrDatabase::class.java,
-                    "filmr_tv_pro_v6.db"
-                ).fallbackToDestructiveMigration().build().also { INSTANCE = it }
-            }
+        fun get(context: Context): FilmrDatabase = INSTANCE ?: synchronized(this) {
+            INSTANCE ?: Room.databaseBuilder(
+                context.applicationContext,
+                FilmrDatabase::class.java,
+                "filmr_nuvio_tv.db"
+            ).fallbackToDestructiveMigration().build().also { INSTANCE = it }
         }
     }
 }
