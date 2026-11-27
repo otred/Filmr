@@ -25,7 +25,7 @@ class StremioAddonService {
     private fun getJson(url: String): JSONObject? = try {
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android TV) FilmrTV/1.1")
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android TV) FilmrTV/1.5")
             .build()
         client.newCall(req).execute().use { res ->
             if (!res.isSuccessful) return null

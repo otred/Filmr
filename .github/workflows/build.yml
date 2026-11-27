@@ -1,15 +1,15 @@
-name: Build Filmr TV APK
+name: Build Filmr TV Pro APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -23,11 +23,11 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build Filmr Debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Build Debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Upload Filmr APK
+      - name: Upload Filmr TV APK
         uses: actions/upload-artifact@v4
         with:
-          name: Filmr-TV-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Filmr-TV-Pro-v6-Debug
+          path: app/build/outputs/apk/debug/*.apk

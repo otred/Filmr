@@ -18,10 +18,10 @@ class CloudStreamRepoService {
         .build()
 
     private fun fetchText(url: String): String? = try {
-        val clean = url.trim().split("\s+".toRegex()).firstOrNull { it.startsWith("http") } ?: return null
+        val clean = url.trim().split("\\s+".toRegex()).firstOrNull { it.startsWith("http") } ?: return null
         val req = Request.Builder()
             .url(clean)
-            .header("User-Agent", "CloudStream/3.0 FilmrTV/1.1")
+            .header("User-Agent", "CloudStream/3.0 FilmrTV/1.5")
             .build()
         client.newCall(req).execute().use { res ->
             if (!res.isSuccessful) null else res.body?.string()
@@ -29,7 +29,7 @@ class CloudStreamRepoService {
     } catch (_: Exception) { null }
 
     suspend fun parseRepository(rawRepoUrl: String): List<AddonEntity> = withContext(Dispatchers.IO) {
-        val cleanUrl = rawRepoUrl.trim().split("\s+".toRegex()).firstOrNull { it.startsWith("http") } ?: return@withContext emptyList()
+        val cleanUrl = rawRepoUrl.trim().split("\\s+".toRegex()).firstOrNull { it.startsWith("http") } ?: return@withContext emptyList()
         val body = fetchText(cleanUrl) ?: return@withContext emptyList()
         val result = mutableListOf<AddonEntity>()
         try {
