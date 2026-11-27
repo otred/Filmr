@@ -191,23 +191,15 @@ class BuiltInTorrentEngine(private val context: Context) {
             val contentLength = (end - start + 1).coerceAtLeast(0L)
             val headers = buildString {
                 if (rangeHeader != null) {
-                    append("HTTP/1.1 206 Partial Content
-")
-                    append("Content-Range: bytes $start-$end/$fileLen
-")
+                    append("HTTP/1.1 206 Partial Content\r\n")
+                    append("Content-Range: bytes $start-$end/$fileLen\r\n")
                 } else {
-                    append("HTTP/1.1 200 OK
-")
+                    append("HTTP/1.1 200 OK\r\n")
                 }
-                append("Content-Type: video/mp4
-")
-                append("Accept-Ranges: bytes
-")
-                append("Content-Length: $contentLength
-")
-                append("Connection: close
-
-")
+                append("Content-Type: video/mp4\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Content-Length: $contentLength\r\n")
+                append("Connection: close\r\n\r\n")
             }
             out.write(headers.toByteArray(Charsets.UTF_8))
             out.flush()
