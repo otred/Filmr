@@ -1,1 +1,2 @@
+-keep class org.libtorrent4j.** { *; }
 -keep class com.filmr.tv.** { *; }
