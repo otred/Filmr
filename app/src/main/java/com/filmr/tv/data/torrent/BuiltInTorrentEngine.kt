@@ -312,23 +312,15 @@ class BuiltInTorrentEngine(private val context: Context) {
 
             val headers = buildString {
                 if (isPartial) {
-                    append("HTTP/1.1 206 Partial Content
-")
-                    append("Content-Range: bytes $startByte-$endByte/$fileSize
-")
+                    append("HTTP/1.1 206 Partial Content\r\n")
+                    append("Content-Range: bytes $startByte-$endByte/$fileSize\r\n")
                 } else {
-                    append("HTTP/1.1 200 OK
-")
+                    append("HTTP/1.1 200 OK\r\n")
                 }
-                append("Content-Type: $mimeType
-")
-                append("Accept-Ranges: bytes
-")
-                append("Content-Length: $contentLength
-")
-                append("Connection: close
-
-")
+                append("Content-Type: $mimeType\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Content-Length: $contentLength\r\n")
+                append("Connection: close\r\n\r\n")
             }
             output.write(headers.toByteArray(StandardCharsets.UTF_8))
             output.flush()
