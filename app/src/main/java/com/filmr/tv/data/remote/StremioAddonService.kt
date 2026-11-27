@@ -4,6 +4,7 @@ import com.filmr.tv.data.model.*
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -18,13 +19,15 @@ class StremioAddonService {
     private fun getJson(url: String): JSONObject? = try {
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "FilmrTV/2.0 (Android TV)")
+            .header("User-Agent", "FilmrTV/2.5 (Android TV)")
             .build()
         client.newCall(req).execute().use { res ->
             if (!res.isSuccessful) return null
             res.body?.string()?.let { JSONObject(it) }
         }
-    } catch (_: Exception) { null }
+    } catch (_: Exception) {
+        null
+    }
 
     suspend fun fetchManifest(rawUrl: String): AddonEntity? = withContext(Dispatchers.IO) {
         val clean = rawUrl.trim().replace("stremio://", "https://")
@@ -141,7 +144,7 @@ class StremioAddonService {
                             else -> ""
                         }
                         if (finalUrl.isBlank()) continue
-                        val name = s.optString("name", addon.name)
+                        val name = s.optString("name", addon.name).replace("\n", " ").replace("\r", " ")
                         val title = s.optString("title", s.optString("description", "رابط مشاهدة"))
                         val combined = "$name $title"
                         val q = when {
@@ -150,26 +153,33 @@ class StremioAddonService {
                             combined.contains("720", true) -> "720p"
                             else -> "HD"
                         }
-                        val score = when (q) { "4K" -> 2160; "1080p" -> 1080; "720p" -> 720; else -> 480 }
-                        val sizeMatch = Regex("""(\d+(?:\.\d+)?\s*(?:GB|MB))""", RegexOption.IGNORE_CASE).find(combined)
-                        val seedMatch = Regex("""👤\s*(\d+)|seeders?:\s*(\d+)""", RegexOption.IGNORE_CASE).find(combined)
+                        val score = when (q) {
+                            "4K" -> 2160
+                            "1080p" -> 1080
+                            "720p" -> 720
+                            else -> 480
+                        }
+                        val sizeMatch = Regex("(\d+(?:\.\d+)?\s*(?:GB|MB))", RegexOption.IGNORE_CASE).find(combined)
+                        val seedMatch = Regex("👤\s*(\d+)|seeders?:\s*(\d+)", RegexOption.IGNORE_CASE).find(combined)
                         val seeders = (seedMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
                             ?: seedMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0)
                         val isTorrent = finalUrl.startsWith("magnet:", true) || infoHash.isNotBlank()
 
-                        out.add(UnifiedStream(
-                            id = "${addon.id}_$i",
-                            name = name.replace("\n", " "),
-                            title = title,
-                            url = finalUrl,
-                            quality = q,
-                            qualityScore = score,
-                            addonName = addon.name,
-                            sourceType = if (isTorrent) "torrent" else "stremio",
-                            sizeText = sizeMatch?.value ?: "",
-                            seeders = seeders,
-                            isTorrent = isTorrent
-                        ))
+                        out.add(
+                            UnifiedStream(
+                                id = "${addon.id}_$i",
+                                name = name,
+                                title = title,
+                                url = finalUrl,
+                                quality = q,
+                                qualityScore = score,
+                                addonName = addon.name,
+                                sourceType = if (isTorrent) "torrent" else "stremio",
+                                sizeText = sizeMatch?.value ?: "",
+                                seeders = seeders,
+                                isTorrent = isTorrent
+                            )
+                        )
                     }
                     out
                 } ?: emptyList()
@@ -202,13 +212,15 @@ class StremioAddonService {
                             lang.startsWith("en", true) -> "English (${addon.name})"
                             else -> "$lang (${addon.name})"
                         }
-                        out.add(SubtitleTrack(
-                            id = "${addon.id}_sub_$i",
-                            label = label,
-                            language = lang,
-                            url = url,
-                            addonName = addon.name
-                        ))
+                        out.add(
+                            SubtitleTrack(
+                                id = "${addon.id}_sub_$i",
+                                label = label,
+                                language = lang,
+                                url = url,
+                                addonName = addon.name
+                            )
+                        )
                     }
                     out
                 } ?: emptyList()
@@ -216,7 +228,7 @@ class StremioAddonService {
         }.awaitAll().flatten()
     }
 
-    private fun parseMetasArray(arr: org.json.JSONArray, defaultType: String, addonName: String): List<MediaItem> {
+    private fun parseMetasArray(arr: JSONArray, defaultType: String, addonName: String): List<MediaItem> {
         val list = mutableListOf<MediaItem>()
         for (i in 0 until minOf(25, arr.length())) {
             val m = arr.optJSONObject(i) ?: continue
@@ -229,21 +241,23 @@ class StremioAddonService {
             val desc = m.optString("description")
             val year = m.optString("releaseInfo").take(4)
             val imdbRating = m.optString("imdbRating")
-            list.add(MediaItem(
-                id = id,
-                imdbId = if (id.startsWith("tt")) id else "",
-                type = m.optString("type", defaultType),
-                titleAr = name,
-                titleEn = name,
-                posterUrl = poster,
-                backdropUrl = bg.ifBlank { poster },
-                logoUrl = logo,
-                overviewAr = desc,
-                year = year,
-                rating = imdbRating.toDoubleOrNull() ?: 0.0,
-                imdbRating = imdbRating,
-                sourceAddon = addonName
-            ))
+            list.add(
+                MediaItem(
+                    id = id,
+                    imdbId = if (id.startsWith("tt")) id else "",
+                    type = m.optString("type", defaultType),
+                    titleAr = name,
+                    titleEn = name,
+                    posterUrl = poster,
+                    backdropUrl = bg.ifBlank { poster },
+                    logoUrl = logo,
+                    overviewAr = desc,
+                    year = year,
+                    rating = imdbRating.toDoubleOrNull() ?: 0.0,
+                    imdbRating = imdbRating,
+                    sourceAddon = addonName
+                )
+            )
         }
         return list
     }

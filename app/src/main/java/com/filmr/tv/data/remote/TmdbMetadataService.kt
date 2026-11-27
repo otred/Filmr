@@ -1,399 +1,307 @@
 package com.filmr.tv.data.remote
 
 import com.filmr.tv.data.model.*
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class TmdbMetadataService {
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
-
+    private val apiKey = "439c478a771f35c05022f9feabcca01c"
     private val baseUrl = "https://api.themoviedb.org/3"
     private val imgBase = "https://image.tmdb.org/t/p"
 
-    private suspend fun getJson(url: String): JsonObject? = withContext(Dispatchers.IO) {
-        runCatching {
-            val req = Request.Builder().url(url).build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@use null
-                val body = resp.body?.string() ?: return@use null
-                JsonParser.parseString(body).asJsonObject
-            }
-        }.getOrNull()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .build()
+
+    private fun getJson(url: String): JSONObject? = try {
+        val req = Request.Builder().url(url).build()
+        client.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) return null
+            res.body?.string()?.let { JSONObject(it) }
+        }
+    } catch (_: Exception) {
+        null
     }
 
-    suspend fun fetchHomeCatalogs(settings: AppSettings): List<AddonCatalogRow> {
-        if (!settings.tmdbEnabled || settings.tmdbApiKey.isBlank()) return emptyList()
-        val key = settings.tmdbApiKey
+    suspend fun fetchTrendingRows(settings: AppSettings): List<AddonCatalogRow> = withContext(Dispatchers.IO) {
+        if (!settings.tmdbEnabled) return@withContext emptyList()
         val lang = settings.tmdbLanguage
-
         val rows = mutableListOf<AddonCatalogRow>()
 
-        val trendingMovies = fetchList("$baseUrl/trending/movie/week?api_key=$key&language=$lang", "movie")
-        if (trendingMovies.isNotEmpty()) {
-            rows.add(
-                AddonCatalogRow(
-                    id = "tmdb_trending_movies",
-                    title = "أفلام رائجة هذا الأسبوع",
-                    addonName = "TMDB",
-                    addonType = "tmdb",
-                    items = trendingMovies
-                )
-            )
+        val moviesJson = getJson("$baseUrl/trending/movie/week?api_key=$apiKey&language=$lang")
+        val movies = parseTmdbList(moviesJson?.optJSONArray("results"), "movie")
+        if (movies.isNotEmpty()) {
+            rows.add(AddonCatalogRow("tmdb", "TMDB", "trending_movies", "أفلام رائجة هذا الأسبوع", "ar", movies))
         }
 
-        val trendingSeries = fetchList("$baseUrl/trending/tv/week?api_key=$key&language=$lang", "series")
-        if (trendingSeries.isNotEmpty()) {
-            rows.add(
-                AddonCatalogRow(
-                    id = "tmdb_trending_series",
-                    title = "مسلسلات رائجة هذا الأسبوع",
-                    addonName = "TMDB",
-                    addonType = "tmdb",
-                    items = trendingSeries
-                )
-            )
+        val tvJson = getJson("$baseUrl/trending/tv/week?api_key=$apiKey&language=$lang")
+        val shows = parseTmdbList(tvJson?.optJSONArray("results"), "series")
+        if (shows.isNotEmpty()) {
+            rows.add(AddonCatalogRow("tmdb", "TMDB", "trending_tv", "مسلسلات رائجة هذا الأسبوع", "ar", shows))
         }
-
-        val popularMovies = fetchList("$baseUrl/movie/popular?api_key=$key&language=$lang", "movie")
-        if (popularMovies.isNotEmpty()) {
-            rows.add(
-                AddonCatalogRow(
-                    id = "tmdb_popular_movies",
-                    title = "الأفلام الأكثر مشاهدة",
-                    addonName = "TMDB",
-                    addonType = "tmdb",
-                    items = popularMovies
-                )
-            )
-        }
-
-        val topSeries = fetchList("$baseUrl/tv/top_rated?api_key=$key&language=$lang", "series")
-        if (topSeries.isNotEmpty()) {
-            rows.add(
-                AddonCatalogRow(
-                    id = "tmdb_top_series",
-                    title = "مسلسلات الأعلى تقييماً",
-                    addonName = "TMDB",
-                    addonType = "tmdb",
-                    items = topSeries
-                )
-            )
-        }
-
-        return rows
+        rows
     }
 
-    private suspend fun fetchList(url: String, defaultType: String): List<MediaItem> {
-        val obj = getJson(url) ?: return emptyList()
-        val results = obj.getAsJsonArray("results") ?: return emptyList()
-        return results.mapNotNull { el ->
-            parseMediaSummary(el.asJsonObject, defaultType)
-        }
+    suspend fun searchTmdb(query: String, settings: AppSettings): List<MediaItem> = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext emptyList()
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val json = getJson("$baseUrl/search/multi?api_key=$apiKey&language=${settings.tmdbLanguage}&query=$encoded")
+        parseTmdbList(json?.optJSONArray("results"), "movie")
     }
 
-    suspend fun searchMulti(query: String, settings: AppSettings): List<MediaItem> {
-        if (!settings.tmdbEnabled || settings.tmdbApiKey.isBlank() || query.isBlank()) return emptyList()
-        val q = URLEncoder.encode(query.trim(), "UTF-8")
-        val url = "$baseUrl/search/multi?api_key=${settings.tmdbApiKey}&language=${settings.tmdbLanguage}&query=$q&include_adult=false"
-        val obj = getJson(url) ?: return emptyList()
-        val results = obj.getAsJsonArray("results") ?: return emptyList()
-        return results.mapNotNull { el ->
-            val item = el.asJsonObject
-            val mediaType = item.get("media_type")?.asString ?: return@mapNotNull null
-            if (mediaType != "movie" && mediaType != "tv") return@mapNotNull null
-            parseMediaSummary(item, if (mediaType == "tv") "series" else "movie")
-        }
-    }
+    suspend fun enrichItem(item: MediaItem, settings: AppSettings): MediaItem = withContext(Dispatchers.IO) {
+        if (!settings.tmdbEnabled) return@withContext item
+        val isSeries = item.type == "series" || item.type == "tv"
+        val mediaType = if (isSeries) "tv" else "movie"
+        var tmdbId = item.tmdbId
 
-    suspend fun enrichMediaDetails(baseItem: MediaItem, settings: AppSettings): MediaItem {
-        if (!settings.tmdbEnabled || settings.tmdbApiKey.isBlank()) return baseItem
-        val key = settings.tmdbApiKey
-        val lang = settings.tmdbLanguage
-        val isSeries = baseItem.type == "series" || baseItem.type == "tv"
-        val tmdbType = if (isSeries) "tv" else "movie"
-
-        var tmdbId = baseItem.tmdbId ?: baseItem.id.removePrefix("tmdb:").toIntOrNull()
-        if (tmdbId == null && !baseItem.imdbId.isNullOrBlank()) {
-            val findObj = getJson("$baseUrl/find/${baseItem.imdbId}?api_key=$key&external_source=imdb_id")
-            val arrKey = if (isSeries) "tv_results" else "movie_results"
-            val arr = findObj?.getAsJsonArray(arrKey)
-            if (arr != null && arr.size() > 0) {
-                tmdbId = arr[0].asJsonObject.get("id")?.asInt
-            }
+        if (tmdbId == 0 && item.imdbId.startsWith("tt")) {
+            val findJson = getJson("$baseUrl/find/${item.imdbId}?api_key=$apiKey&external_source=imdb_id")
+            val arr = if (isSeries) findJson?.optJSONArray("tv_results") else findJson?.optJSONArray("movie_results")
+            tmdbId = arr?.optJSONObject(0)?.optInt("id") ?: 0
         }
-        if (tmdbId == null) {
-            val titleQuery = baseItem.titleEn.ifBlank { baseItem.titleAr }
-            if (titleQuery.isNotBlank()) {
-                val q = URLEncoder.encode(titleQuery, "UTF-8")
-                val searchObj = getJson("$baseUrl/search/$tmdbType?api_key=$key&query=$q")
-                val arr = searchObj?.getAsJsonArray("results")
-                if (arr != null && arr.size() > 0) {
-                    tmdbId = arr[0].asJsonObject.get("id")?.asInt
+        if (tmdbId == 0) {
+            val q = URLEncoder.encode(item.titleEn.ifBlank { item.titleAr }, "UTF-8")
+            val searchJson = getJson("$baseUrl/search/$mediaType?api_key=$apiKey&query=$q")
+            tmdbId = searchJson?.optJSONArray("results")?.optJSONObject(0)?.optInt("id") ?: 0
+        }
+        if (tmdbId == 0) return@withContext item
+
+        val details = getJson(
+            "$baseUrl/$mediaType/$tmdbId?api_key=$apiKey&language=${settings.tmdbLanguage}&append_to_response=external_ids,credits,images,recommendations&include_image_language=en,ar,null"
+        ) ?: return@withContext item
+
+        val extIds = details.optJSONObject("external_ids")
+        val imdbId = extIds?.optString("imdb_id")?.takeIf { it.startsWith("tt") } ?: item.imdbId
+        val titleAr = details.optString("title", details.optString("name", item.titleAr))
+        val titleEn = details.optString("original_title", details.optString("original_name", item.titleEn))
+        var overview = details.optString("overview")
+        if (overview.isBlank()) {
+            val enDetails = getJson("$baseUrl/$mediaType/$tmdbId?api_key=$apiKey&language=en-US")
+            overview = enDetails?.optString("overview") ?: item.overviewAr
+        }
+
+        val posterPath = details.optString("poster_path")
+        val backdropPath = details.optString("backdrop_path")
+        val logos = details.optJSONObject("images")?.optJSONArray("logos")
+        val logoPath = logos?.optJSONObject(0)?.optString("file_path") ?: ""
+
+        val castList = mutableListOf<CastMember>()
+        if (settings.tmdbCast) {
+            val castArr = details.optJSONObject("credits")?.optJSONArray("cast")
+            if (castArr != null) {
+                for (i in 0 until minOf(15, castArr.length())) {
+                    val c = castArr.getJSONObject(i)
+                    val prof = c.optString("profile_path")
+                    castList.add(
+                        CastMember(
+                            id = c.optInt("id"),
+                            name = c.optString("name"),
+                            character = c.optString("character"),
+                            profileUrl = if (prof.isNotBlank()) "$imgBase/w185$prof" else ""
+                        )
+                    )
                 }
             }
         }
-        if (tmdbId == null) return baseItem
 
-        val detailsUrl = "$baseUrl/$tmdbType/$tmdbId?api_key=$key&language=$lang&append_to_response=external_ids,credits,images,recommendations&include_image_language=en,ar,null"
-        val obj = getJson(detailsUrl) ?: return baseItem
-
-        // Fallback English overview if Arabic is empty
-        var overview = obj.get("overview")?.asString.orEmpty()
-        var titleEn = obj.get(if (isSeries) "original_name" else "original_title")?.asString.orEmpty()
-        if (overview.isBlank() || titleEn.isBlank()) {
-            val enObj = getJson("$baseUrl/$tmdbType/$tmdbId?api_key=$key&language=en-US")
-            if (overview.isBlank()) overview = enObj?.get("overview")?.asString.orEmpty()
-            if (titleEn.isBlank()) titleEn = enObj?.get(if (isSeries) "name" else "title")?.asString.orEmpty()
-        }
-
-        val titleAr = obj.get(if (isSeries) "name" else "title")?.asString.orEmpty().ifBlank { baseItem.titleAr }
-        val extIds = obj.getAsJsonObject("external_ids")
-        val imdbId = extIds?.get("imdb_id")?.takeIf { !it.isJsonNull }?.asString ?: baseItem.imdbId
-
-        val posterPath = obj.get("poster_path")?.takeIf { !it.isJsonNull }?.asString
-        val backdropPath = obj.get("backdrop_path")?.takeIf { !it.isJsonNull }?.asString
-        val posterUrl = if (settings.tmdbArtwork && posterPath != null) "$imgBase/w500$posterPath" else baseItem.posterUrl
-        val backdropUrl = if (settings.tmdbArtwork && backdropPath != null) "$imgBase/w1280$backdropPath" else baseItem.backdropUrl
-
-        var logoUrl: String? = baseItem.logoUrl
-        if (settings.tmdbArtwork) {
-            val logos = obj.getAsJsonObject("images")?.getAsJsonArray("logos")
-            if (logos != null && logos.size() > 0) {
-                val chosen = logos.firstOrNull {
-                    val iso = it.asJsonObject.get("iso_639_1")?.takeIf { x -> !x.isJsonNull }?.asString
-                    iso == "en" || iso == "ar"
-                } ?: logos[0]
-                val path = chosen.asJsonObject.get("file_path")?.asString
-                if (!path.isNullOrBlank()) logoUrl = "$imgBase/w500$path"
-            }
-        }
-
-        val voteAvg = obj.get("vote_average")?.takeIf { !it.isJsonNull }?.asDouble ?: 0.0
-        val tmdbRating = if (voteAvg > 0) String.format("%.1f", voteAvg) else baseItem.tmdbRating
-
-        val dateStr = obj.get(if (isSeries) "first_air_date" else "release_date")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val year = dateStr.take(4).ifBlank { baseItem.year }
-
-        val runtime = if (isSeries) {
-            obj.getAsJsonArray("episode_run_time")?.firstOrNull()?.asInt ?: baseItem.runtimeMinutes
-        } else {
-            obj.get("runtime")?.takeIf { !it.isJsonNull }?.asInt ?: baseItem.runtimeMinutes
-        }
-
-        val genres = obj.getAsJsonArray("genres")?.mapNotNull {
-            it.asJsonObject.get("name")?.asString
-        } ?: baseItem.genres
-
-        // Cast
-        val castList = if (settings.tmdbCast) {
-            obj.getAsJsonObject("credits")?.getAsJsonArray("cast")?.take(16)?.mapNotNull { c ->
-                val co = c.asJsonObject
-                val id = co.get("id")?.asInt ?: return@mapNotNull null
-                val name = co.get("name")?.asString ?: return@mapNotNull null
-                val character = co.get("character")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-                val pPath = co.get("profile_path")?.takeIf { !it.isJsonNull }?.asString
-                CastMember(
-                    id = id,
-                    name = name,
-                    character = character,
-                    profileUrl = pPath?.let { "$imgBase/w185$it" }
-                )
-            } ?: baseItem.cast
-        } else emptyList()
-
-        // Companies & Networks
-        val companyList = mutableListOf<CompanyItem>()
+        val companiesList = mutableListOf<CompanyItem>()
         if (settings.tmdbCompanies) {
-            obj.getAsJsonArray("networks")?.forEach { n ->
-                val no = n.asJsonObject
-                val id = no.get("id")?.asInt ?: return@forEach
-                val name = no.get("name")?.asString ?: return@forEach
-                val lPath = no.get("logo_path")?.takeIf { !it.isJsonNull }?.asString
-                companyList.add(CompanyItem(id, name, lPath?.let { "$imgBase/w185$it" }, isNetwork = true))
-            }
-            obj.getAsJsonArray("production_companies")?.take(6)?.forEach { c ->
-                val co = c.asJsonObject
-                val id = co.get("id")?.asInt ?: return@forEach
-                val name = co.get("name")?.asString ?: return@forEach
-                val lPath = co.get("logo_path")?.takeIf { !it.isJsonNull }?.asString
-                companyList.add(CompanyItem(id, name, lPath?.let { "$imgBase/w185$it" }, isNetwork = false))
-            }
-        }
-
-        // Recommendations
-        val recs = if (settings.tmdbRecommendations) {
-            obj.getAsJsonObject("recommendations")?.getAsJsonArray("results")?.take(14)?.mapNotNull { r ->
-                parseMediaSummary(r.asJsonObject, if (isSeries) "series" else "movie")
-            } ?: baseItem.recommendations
-        } else emptyList()
-
-        // Seasons & Episodes for Series
-        val seasonsCount = obj.get("number_of_seasons")?.takeIf { !it.isJsonNull }?.asInt ?: baseItem.seasonsCount
-        val episodes = if (isSeries && seasonsCount > 0) {
-            fetchSeasonEpisodes(tmdbId, 1, imdbId ?: "tmdb:$tmdbId", settings)
-        } else baseItem.episodes
-
-        // MDBList Multi-Ratings Enrichment
-        var imdbRating = baseItem.imdbRating
-        var rtRating = baseItem.rtRating
-        var mcRating = baseItem.metacriticRating
-        var lbRating = baseItem.letterboxdRating
-        var malRating = baseItem.malRating
-
-        if (settings.mdblistApiKey.isNotBlank() && !imdbId.isNullOrBlank()) {
-            val mdbObj = getJson("https://mdblist.com/api/?apikey=${settings.mdblistApiKey}&i=$imdbId")
-            val ratingsArr = mdbObj?.getAsJsonArray("ratings")
-            ratingsArr?.forEach { rEl ->
-                val ro = rEl.asJsonObject
-                val src = ro.get("source")?.asString?.lowercase().orEmpty()
-                val valStr = ro.get("value")?.takeIf { !it.isJsonNull }?.asString ?: return@forEach
-                if (valStr == "0" || valStr == "null") return@forEach
-                when (src) {
-                    "imdb" -> imdbRating = valStr
-                    "tomatoes" -> rtRating = "$valStr%"
-                    "metacritic" -> mcRating = valStr
-                    "letterboxd" -> lbRating = valStr
-                    "myanimelist" -> malRating = valStr
+            val compArr = details.optJSONArray("production_companies")
+            if (compArr != null) {
+                for (i in 0 until minOf(6, compArr.length())) {
+                    val comp = compArr.getJSONObject(i)
+                    val lPath = comp.optString("logo_path")
+                    companiesList.add(
+                        CompanyItem(
+                            id = comp.optInt("id"),
+                            name = comp.optString("name"),
+                            logoUrl = if (lPath.isNotBlank()) "$imgBase/w185$lPath" else "",
+                            isNetwork = false
+                        )
+                    )
                 }
             }
         }
 
-        return baseItem.copy(
-            id = imdbId ?: "tmdb:$tmdbId",
-            imdbId = imdbId,
+        var networkName = ""
+        var networkId = 0
+        if (settings.tmdbNetworks && isSeries) {
+            val netArr = details.optJSONArray("networks")
+            val firstNet = netArr?.optJSONObject(0)
+            if (firstNet != null) {
+                networkName = firstNet.optString("name")
+                networkId = firstNet.optInt("id")
+                val lPath = firstNet.optString("logo_path")
+                companiesList.add(
+                    0,
+                    CompanyItem(
+                        id = networkId,
+                        name = networkName,
+                        logoUrl = if (lPath.isNotBlank()) "$imgBase/w185$lPath" else "",
+                        isNetwork = true
+                    )
+                )
+            }
+        }
+
+        val recs = if (settings.tmdbRecommendations) {
+            parseTmdbList(details.optJSONObject("recommendations")?.optJSONArray("results"), item.type)
+        } else emptyList()
+
+        val seasonsCount = details.optInt("number_of_seasons", 1).coerceAtLeast(1)
+        val episodes = if (isSeries && settings.tmdbEpisodes) {
+            fetchSeasonEpisodes(tmdbId, 1, settings.tmdbLanguage)
+        } else emptyList()
+
+        val voteAvg = details.optDouble("vote_average", item.rating)
+        val tmdbScore = if (voteAvg > 0) String.format("%.1f", voteAvg) else ""
+
+        var enriched = item.copy(
             tmdbId = tmdbId,
-            titleAr = titleAr,
-            titleEn = titleEn,
-            posterUrl = posterUrl,
-            backdropUrl = backdropUrl,
-            logoUrl = logoUrl,
-            overview = overview,
-            year = year,
-            runtimeMinutes = runtime,
+            imdbId = imdbId,
+            titleAr = if (settings.tmdbBasicInfo) titleAr.ifBlank { item.titleAr } else item.titleAr,
+            titleEn = titleEn.ifBlank { item.titleEn },
+            posterUrl = if (settings.tmdbArtwork && posterPath.isNotBlank()) "$imgBase/w500$posterPath" else item.posterUrl,
+            backdropUrl = if (settings.tmdbArtwork && backdropPath.isNotBlank()) "$imgBase/w1280$backdropPath" else item.backdropUrl,
+            logoUrl = if (settings.tmdbArtwork && logoPath.isNotBlank()) "$imgBase/w500$logoPath" else item.logoUrl,
+            overviewAr = if (settings.tmdbBasicInfo) overview.ifBlank { item.overviewAr } else item.overviewAr,
+            runtimeMinutes = details.optInt("runtime", item.runtimeMinutes),
             seasonsCount = seasonsCount,
-            genres = genres,
             episodes = episodes,
             cast = castList,
-            companies = companyList,
+            companies = companiesList,
+            network = networkName,
+            networkId = networkId,
             recommendations = recs,
-            imdbRating = imdbRating,
-            tmdbRating = tmdbRating,
-            rtRating = rtRating,
-            metacriticRating = mcRating,
-            letterboxdRating = lbRating,
-            malRating = malRating
+            rating = voteAvg,
+            tmdbRating = tmdbScore,
+            imdbRating = item.imdbRating.ifBlank { tmdbScore }
         )
+
+        if (settings.mdbListApiKey.isNotBlank() && imdbId.startsWith("tt")) {
+            enriched = fetchMdbListRatings(enriched, settings.mdbListApiKey)
+        }
+        enriched
     }
 
-    suspend fun fetchSeasonEpisodes(
-        tmdbId: Int,
-        seasonNumber: Int,
-        seriesExternalId: String,
-        settings: AppSettings
-    ): List<EpisodeItem> {
-        val key = settings.tmdbApiKey
-        val lang = settings.tmdbLanguage
-        val obj = getJson("$baseUrl/tv/$tmdbId/season/$seasonNumber?api_key=$key&language=$lang") ?: return emptyList()
-        val eps = obj.getAsJsonArray("episodes") ?: return emptyList()
-        return eps.mapNotNull { el ->
-            val eo = el.asJsonObject
-            val epNum = eo.get("episode_number")?.asInt ?: return@mapNotNull null
-            val name = eo.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "الحلقة $epNum"
-            val overview = eo.get("overview")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-            val stillPath = eo.get("still_path")?.takeIf { !it.isJsonNull }?.asString
-            val airDate = eo.get("air_date")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-            val runtime = eo.get("runtime")?.takeIf { !it.isJsonNull }?.asInt ?: 0
-            EpisodeItem(
-                id = "$seriesExternalId:$seasonNumber:$epNum",
-                season = seasonNumber,
-                episode = epNum,
-                title = name,
-                overview = overview,
-                thumbnailUrl = stillPath?.let { "$imgBase/w500$it" },
-                released = airDate,
-                runtimeMinutes = runtime
+    suspend fun fetchSeasonEpisodes(tmdbId: Int, seasonNumber: Int, language: String): List<EpisodeItem> = withContext(Dispatchers.IO) {
+        if (tmdbId == 0) return@withContext emptyList()
+        val json = getJson("$baseUrl/tv/$tmdbId/season/$seasonNumber?api_key=$apiKey&language=$language")
+            ?: return@withContext emptyList()
+        val arr = json.optJSONArray("episodes") ?: return@withContext emptyList()
+        val list = mutableListOf<EpisodeItem>()
+        for (i in 0 until arr.length()) {
+            val ep = arr.getJSONObject(i)
+            val still = ep.optString("still_path")
+            list.add(
+                EpisodeItem(
+                    seasonNumber = seasonNumber,
+                    episodeNumber = ep.optInt("episode_number", i + 1),
+                    name = ep.optString("name", "الحلقة ${i + 1}"),
+                    overview = ep.optString("overview"),
+                    stillUrl = if (still.isNotBlank()) "$imgBase/w500$still" else "",
+                    airDate = ep.optString("air_date"),
+                    runtime = ep.optInt("runtime", 0)
+                )
             )
         }
+        list
     }
 
-    suspend fun fetchPersonDetails(personId: Int, settings: AppSettings): PersonDetails? {
-        val key = settings.tmdbApiKey
-        val obj = getJson("$baseUrl/person/$personId?api_key=$key&language=${settings.tmdbLanguage}&append_to_response=combined_credits") ?: return null
-        val name = obj.get("name")?.asString ?: return null
-        val bio = obj.get("biography")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val bday = obj.get("birthday")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val place = obj.get("place_of_birth")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val pPath = obj.get("profile_path")?.takeIf { !it.isJsonNull }?.asString
-        val castCredits = obj.getAsJsonObject("combined_credits")?.getAsJsonArray("cast")?.take(24)?.mapNotNull { el ->
-            val co = el.asJsonObject
-            val mType = co.get("media_type")?.asString ?: "movie"
-            if (mType != "movie" && mType != "tv") return@mapNotNull null
-            parseMediaSummary(co, if (mType == "tv") "series" else "movie")
-        } ?: emptyList()
-
-        return PersonDetails(
+    suspend fun fetchPersonDetails(personId: Int, language: String): PersonDetails? = withContext(Dispatchers.IO) {
+        val json = getJson("$baseUrl/person/$personId?api_key=$apiKey&language=$language&append_to_response=combined_credits")
+            ?: return@withContext null
+        val prof = json.optString("profile_path")
+        val credits = parseTmdbList(json.optJSONObject("combined_credits")?.optJSONArray("cast"), "movie")
+        PersonDetails(
             id = personId,
-            name = name,
-            biography = bio,
-            birthday = bday,
-            placeOfBirth = place,
-            profileUrl = pPath?.let { "$imgBase/w342$it" },
-            credits = castCredits
+            name = json.optString("name"),
+            biography = json.optString("biography"),
+            birthday = json.optString("birthday"),
+            placeOfBirth = json.optString("place_of_birth"),
+            profileUrl = if (prof.isNotBlank()) "$imgBase/w300$prof" else "",
+            knownFor = credits
         )
     }
 
-    suspend fun discoverByCompanyOrNetwork(
-        id: Int,
-        isNetwork: Boolean,
-        sortBy: String,
-        settings: AppSettings
-    ): List<MediaItem> {
-        val key = settings.tmdbApiKey
-        val lang = settings.tmdbLanguage
-        return if (isNetwork) {
-            fetchList("$baseUrl/discover/tv?api_key=$key&language=$lang&with_networks=$id&sort_by=$sortBy", "series")
-        } else {
-            val movies = fetchList("$baseUrl/discover/movie?api_key=$key&language=$lang&with_companies=$id&sort_by=$sortBy", "movie")
-            val series = fetchList("$baseUrl/discover/tv?api_key=$key&language=$lang&with_companies=$id&sort_by=$sortBy", "series")
-            (movies + series).take(24)
+    suspend fun discoverByCompanyOrNetwork(company: CompanyItem, sortBy: String, language: String): List<MediaItem> = withContext(Dispatchers.IO) {
+        val endpoint = if (company.isNetwork) "tv" else "movie"
+        val param = if (company.isNetwork) "with_networks=${company.id}" else "with_companies=${company.id}"
+        val json = getJson("$baseUrl/discover/$endpoint?api_key=$apiKey&language=$language&$param&sort_by=$sortBy")
+        parseTmdbList(json?.optJSONArray("results"), if (company.isNetwork) "series" else "movie")
+    }
+
+    private fun fetchMdbListRatings(item: MediaItem, apiKey: String): MediaItem {
+        val json = getJson("https://mdblist.com/api/?apikey=$apiKey&i=${item.imdbId}") ?: return item
+        val ratings = json.optJSONArray("ratings") ?: return item
+        var imdb = item.imdbRating
+        var rt = ""
+        var mc = ""
+        var lb = ""
+        var mal = ""
+        for (i in 0 until ratings.length()) {
+            val r = ratings.getJSONObject(i)
+            val src = r.optString("source")
+            val valStr = r.optString("value")
+            if (valStr.isBlank() || valStr == "null") continue
+            when (src) {
+                "imdb" -> imdb = valStr
+                "tomatoes" -> rt = "$valStr%"
+                "metacritic" -> mc = valStr
+                "letterboxd" -> lb = valStr
+                "myanimelist" -> mal = valStr
+            }
         }
+        return item.copy(
+            imdbRating = imdb,
+            rtRating = rt,
+            metacriticRating = mc,
+            letterboxdRating = lb,
+            malRating = mal
+        )
     }
 
-    private fun parseMediaSummary(obj: JsonObject, defaultType: String): MediaItem? {
-        val id = obj.get("id")?.asInt ?: return null
-        val isSeries = defaultType == "series" || defaultType == "tv"
-        val titleAr = obj.get(if (isSeries) "name" else "title")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val titleEn = obj.get(if (isSeries) "original_name" else "original_title")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        if (titleAr.isBlank() && titleEn.isBlank()) return null
-
-        val posterPath = obj.get("poster_path")?.takeIf { !it.isJsonNull }?.asString
-        val backdropPath = obj.get("backdrop_path")?.takeIf { !it.isJsonNull }?.asString
-        val overview = obj.get("overview")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val dateStr = obj.get(if (isSeries) "first_air_date" else "release_date")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-        val vote = obj.get("vote_average")?.takeIf { !it.isJsonNull }?.asDouble ?: 0.0
-
-        return MediaItem(
-            id = "tmdb:$id",
-            tmdbId = id,
-            type = if (isSeries) "series" else "movie",
-            titleAr = titleAr,
-            titleEn = titleEn,
-            posterUrl = posterPath?.let { "$imgBase/w342$it" },
-            backdropUrl = backdropPath?.let { "$imgBase/w1280$it" },
-            overview = overview,
-            year = dateStr.take(4),
-            tmdbRating = if (vote > 0) String.format("%.1f", vote) else null
-        )
+    private fun parseTmdbList(arr: JSONArray?, defaultType: String): List<MediaItem> {
+        if (arr == null) return emptyList()
+        val list = mutableListOf<MediaItem>()
+        for (i in 0 until minOf(25, arr.length())) {
+            val m = arr.optJSONObject(i) ?: continue
+            val mType = m.optString("media_type", defaultType)
+            if (mType == "person") continue
+            val id = m.optInt("id")
+            if (id == 0) continue
+            val title = m.optString("title", m.optString("name"))
+            val origTitle = m.optString("original_title", m.optString("original_name", title))
+            val poster = m.optString("poster_path")
+            val backdrop = m.optString("backdrop_path")
+            val date = m.optString("release_date", m.optString("first_air_date")).take(4)
+            val vote = m.optDouble("vote_average", 0.0)
+            val normType = if (mType == "tv" || mType == "series") "series" else "movie"
+            list.add(
+                MediaItem(
+                    id = "tmdb_$id",
+                    tmdbId = id,
+                    type = normType,
+                    titleAr = title,
+                    titleEn = origTitle,
+                    posterUrl = if (poster.isNotBlank()) "$imgBase/w500$poster" else "",
+                    backdropUrl = if (backdrop.isNotBlank()) "$imgBase/w1280$backdrop" else "",
+                    overviewAr = m.optString("overview"),
+                    year = date,
+                    rating = vote,
+                    tmdbRating = if (vote > 0) String.format("%.1f", vote) else "",
+                    sourceAddon = "TMDB"
+                )
+            )
+        }
+        return list
     }
 }

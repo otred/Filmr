@@ -1,412 +1,251 @@
 package com.filmr.tv.data.torrent
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
-import org.libtorrent4j.SessionParams
-import org.libtorrent4j.SettingsPack
-import org.libtorrent4j.Sha1Hash
-import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
-import org.libtorrent4j.swig.settings_pack
 import java.io.File
 import java.io.RandomAccessFile
-import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.charset.StandardCharsets
 
-data class TorrentStreamStatus(
-    val isActive: Boolean = false,
+data class TorrentStreamState(
     val statusText: String = "",
     val progressPercent: Int = 0,
     val downloadSpeedKb: Int = 0,
-    val peersCount: Int = 0,
-    val streamUrl: String? = null,
-    val fileName: String = "",
+    val peers: Int = 0,
+    val localStreamUrl: String? = null,
     val error: String? = null
 )
 
 class BuiltInTorrentEngine(private val context: Context) {
-
-    private val _status = MutableStateFlow(TorrentStreamStatus())
-    val status: StateFlow<TorrentStreamStatus> = _status.asStateFlow()
-
-    private var sessionManager: SessionManager? = null
-    private var currentHandle: TorrentHandle? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var session: SessionManager? = null
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
     private var monitorJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var activeVideoFile: File? = null
 
-    private val torrentCacheDir: File by lazy {
-        File(context.cacheDir, "filmr_torrent_stream").apply { mkdirs() }
-    }
+    private val _state = MutableStateFlow(TorrentStreamState())
+    val state: StateFlow<TorrentStreamState> = _state
 
-    @Synchronized
-    private fun ensureSession(lowEndMode: Boolean = false): SessionManager {
-        sessionManager?.let {
-            if (it.isRunning) return it
-        }
-        val settings = SettingsPack()
-        settings.setString(
-            settings_pack.string_types.user_agent.swigValue(),
-            "FilmrTV/2.0 libtorrent4j"
-        )
-        val maxConns = if (lowEndMode) 65 else 150
-        settings.setInteger(settings_pack.int_types.connections_limit.swigValue(), maxConns)
-        settings.setInteger(settings_pack.int_types.active_downloads.swigValue(), 2)
-        settings.setBoolean(settings_pack.bool_types.enable_dht.swigValue(), true)
-        settings.setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
-        settings.setBoolean(settings_pack.bool_types.enable_upnp.swigValue(), true)
-        settings.setBoolean(settings_pack.bool_types.enable_natpmp.swigValue(), true)
-
-        val sm = SessionManager()
-        sm.start(SessionParams(settings))
-        sessionManager = sm
-        return sm
-    }
-
-    fun startMagnetStream(
-        magnetUri: String,
-        preferredFileIdx: Int? = null,
-        lowEndMode: Boolean = false
-    ) {
-        stopCurrentStream(keepSession = true)
-
-        _status.value = TorrentStreamStatus(
-            isActive = true,
-            statusText = "جاري الاتصال بشبكة التورنت وجلب البيانات..."
-        )
+    fun startMagnetStream(magnetUri: String) {
+        stop()
+        _state.value = TorrentStreamState(statusText = "جاري تشغيل محرك التورنت المدمج...")
 
         monitorJob = scope.launch {
             try {
-                val sm = ensureSession(lowEndMode)
-                val enrichedMagnet = appendPublicTrackers(magnetUri)
-
-                val infoBytes = withTimeoutOrNull(35_000L) {
-                    sm.fetchMagnet(enrichedMagnet, 35, torrentCacheDir)
+                val baseDir = File(context.cacheDir, "filmr_torrent_stream").apply {
+                    if (exists()) deleteRecursively()
+                    mkdirs()
                 }
+                val mgr = SessionManager()
+                session = mgr
+                mgr.start()
 
-                if (infoBytes == null || infoBytes.isEmpty()) {
-                    _status.value = TorrentStreamStatus(
-                        isActive = false,
-                        error = "انتهت مهلة جلب بيانات التورنت (لا يوجد سيدرز كافٍ حالياً)"
-                    )
+                _state.value = _state.value.copy(statusText = "جاري جلب بيانات التورنت (Metadata)...")
+                val metadataBytes = mgr.fetchMagnet(magnetUri, 30, baseDir)
+                if (metadataBytes == null || metadataBytes.isEmpty()) {
+                    _state.value = TorrentStreamState(error = "تعذر العثور على مصادر نشطة لهذا التورنت")
                     return@launch
                 }
 
-                val torrentInfo = TorrentInfo(infoBytes)
-                if (!torrentInfo.isValid) {
-                    _status.value = TorrentStreamStatus(
-                        isActive = false,
-                        error = "ملف التورنت غير صالح أو تالف"
-                    )
-                    return@launch
+                val torrentInfo = TorrentInfo.bdecode(metadataBytes)
+                val filesCount = torrentInfo.numFiles()
+                var bestIndex = 0
+                var bestSize = -1L
+                val videoExts = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov")
+
+                for (i in 0 until filesCount) {
+                    val path = torrentInfo.files().filePath(i).lowercase()
+                    val size = torrentInfo.files().fileSize(i)
+                    val isVideo = videoExts.any { path.endsWith(it) }
+                    if (isVideo && size > bestSize) {
+                        bestSize = size
+                        bestIndex = i
+                    }
                 }
-
-                val targetSha1: Sha1Hash = torrentInfo.infoHash()
-                sm.download(torrentInfo, torrentCacheDir)
-
-                var handle: TorrentHandle? = null
-                for (i in 0..35) {
-                    handle = sm.find(targetSha1)
-                    if (handle != null && handle.isValid) break
-                    delay(300L)
-                }
-
-                if (handle == null || !handle.isValid) {
-                    _status.value = TorrentStreamStatus(
-                        isActive = false,
-                        error = "تعذر بدء جلسة التحميل لهذا التورنت"
-                    )
-                    return@launch
-                }
-
-                currentHandle = handle
-                handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-
-                val numFiles = torrentInfo.numFiles()
-                val files = torrentInfo.files()
-                val videoExts = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov", ".m4v", ".ts")
-
-                var targetIdx = preferredFileIdx?.takeIf { it in 0 until numFiles } ?: -1
-                if (targetIdx == -1) {
-                    var maxSize = -1L
-                    for (idx in 0 until numFiles) {
-                        val path = files.filePath(idx).lowercase()
-                        val size = files.fileSize(idx)
-                        if (videoExts.any { path.endsWith(it) } && size > maxSize) {
-                            maxSize = size
-                            targetIdx = idx
+                if (bestSize <= 0L) {
+                    for (i in 0 until filesCount) {
+                        val size = torrentInfo.files().fileSize(i)
+                        if (size > bestSize) {
+                            bestSize = size
+                            bestIndex = i
                         }
                     }
                 }
-                if (targetIdx == -1 && numFiles > 0) {
-                    targetIdx = (0 until numFiles).maxByOrNull { files.fileSize(it) } ?: 0
+
+                mgr.download(torrentInfo, baseDir)
+                val handle: TorrentHandle = mgr.find(torrentInfo.infoHash()) ?: run {
+                    _state.value = TorrentStreamState(error = "فشل بدء تحميل التورنت")
+                    return@launch
                 }
 
-                val priorities = Array(numFiles) { idx ->
-                    if (idx == targetIdx) Priority.TOP_PRIORITY else Priority.IGNORE
+                val priorities = Array(filesCount) { idx ->
+                    if (idx == bestIndex) Priority.SEVEN else Priority.IGNORE
                 }
                 handle.prioritizeFiles(priorities)
+                handle.setSequentialDownload(true)
 
-                val firstPiece = torrentInfo.mapFile(targetIdx, 0L, 1).piece()
-                val fileSize = files.fileSize(targetIdx)
-                val lastPiece = torrentInfo.mapFile(targetIdx, (fileSize - 1024L).coerceAtLeast(0L), 1).piece()
-                val totalPieces = torrentInfo.numPieces()
+                val targetFile = File(baseDir, torrentInfo.files().filePath(bestIndex))
+                activeVideoFile = targetFile
 
-                for (p in firstPiece..(firstPiece + 12).coerceAtMost(totalPieces - 1)) {
-                    handle.piecePriority(p, Priority.TOP_PRIORITY)
-                    handle.setPieceDeadline(p, (p - firstPiece) * 150)
-                }
-                for (p in (lastPiece - 3).coerceAtLeast(firstPiece)..lastPiece) {
-                    handle.piecePriority(p, Priority.TOP_PRIORITY)
-                    handle.setPieceDeadline(p, 500)
-                }
+                val port = startLocalHttpServer(targetFile, bestSize)
+                val streamUrl = "http://127.0.0.1:$port/video.mp4"
+                var announcedReady = false
 
-                val targetFile = File(torrentCacheDir, files.filePath(targetIdx))
-                val fileName = targetFile.name
-
-                val localUrl = startHttpStreamingServer(handle, torrentInfo, targetIdx, targetFile, fileSize)
-
-                val minInitialBytes = (2.5 * 1024 * 1024).toLong().coerceAtMost(fileSize / 10 + 512_000L)
-                var readyNotified = false
-
-                while (isActive && handle.isValid) {
+                while (isActive) {
                     val st = handle.status()
-                    val downloaded = st.totalWantedDone()
-                    val speedKb = st.downloadRate() / 1024
-                    val peers = st.numPeers()
-                    val pct = if (fileSize > 0) ((downloaded * 100) / fileSize).toInt().coerceIn(0, 100) else 0
+                    val prog = (st.progress() * 100f).toInt().coerceIn(0, 100)
+                    val speedKb = (st.downloadPayloadRate() / 1024).coerceAtLeast(0)
+                    val peersCount = st.numPeers()
+                    val existingBytes = if (targetFile.exists()) targetFile.length() else 0L
 
-                    if (!readyNotified && (downloaded >= minInitialBytes || pct >= 2)) {
-                        readyNotified = true
-                        _status.value = TorrentStreamStatus(
-                            isActive = true,
-                            statusText = "جاهز للتشغيل ($speedKb KB/s • $peers متصل)",
-                            progressPercent = pct,
+                    if (!announcedReady && (existingBytes > 4 * 1024 * 1024L || prog >= 3)) {
+                        announcedReady = true
+                        _state.value = TorrentStreamState(
+                            statusText = "جاري البث المباشر",
+                            progressPercent = prog,
                             downloadSpeedKb = speedKb,
-                            peersCount = peers,
-                            streamUrl = localUrl,
-                            fileName = fileName
-                        )
-                    } else if (!readyNotified) {
-                        val mbDone = String.format("%.1f", downloaded / (1024.0 * 1024.0))
-                        _status.value = TorrentStreamStatus(
-                            isActive = true,
-                            statusText = "تجهيز البث: $mbDone MB • السرعة $speedKb KB/s • متصلون: $peers",
-                            progressPercent = pct,
-                            downloadSpeedKb = speedKb,
-                            peersCount = peers,
-                            fileName = fileName
+                            peers = peersCount,
+                            localStreamUrl = streamUrl
                         )
                     } else {
-                        _status.value = _status.value.copy(
-                            statusText = "يبث مباشرة • $speedKb KB/s • متصلون: $peers",
-                            progressPercent = pct,
+                        _state.value = _state.value.copy(
+                            statusText = if (announcedReady) "جاري البث المباشر" else "جاري التحميل المسبق ($prog%)...",
+                            progressPercent = prog,
                             downloadSpeedKb = speedKb,
-                            peersCount = peers
+                            peers = peersCount,
+                            localStreamUrl = if (announcedReady) streamUrl else null
                         )
                     }
-                    delay(800L)
+                    delay(1000L)
                 }
-            } catch (_: CancellationException) {
-                // Normal cancellation
             } catch (e: Exception) {
-                Log.e("FilmrTorrent", "Torrent error", e)
-                _status.value = TorrentStreamStatus(
-                    isActive = false,
-                    error = "خطأ في محرك التورنت: ${e.localizedMessage ?: "خطأ غير معروف"}"
-                )
+                if (isActive) {
+                    _state.value = TorrentStreamState(error = "خطأ في التورنت: ${e.message ?: "غير معروف"}")
+                }
             }
         }
     }
 
-    private fun startHttpStreamingServer(
-        handle: TorrentHandle,
-        torrentInfo: TorrentInfo,
-        fileIdx: Int,
-        targetFile: File,
-        fileSize: Long
-    ): String {
-        val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
-        serverSocket = server
-        val port = server.localPort
+    private fun startLocalHttpServer(file: File, totalLength: Long): Int {
+        val srv = ServerSocket(0)
+        serverSocket = srv
+        val port = srv.localPort
 
         serverJob = scope.launch {
-            while (isActive && !server.isClosed) {
+            while (isActive && !srv.isClosed) {
                 try {
-                    val client = server.accept()
-                    launch {
-                        handleHttpClient(client, handle, torrentInfo, fileIdx, targetFile, fileSize)
-                    }
+                    val client = srv.accept()
+                    launch { handleHttpClient(client, file, totalLength) }
                 } catch (_: Exception) {
                     break
                 }
             }
         }
-        return "http://127.0.0.1:$port/video.mkv"
+        return port
     }
 
-    private suspend fun handleHttpClient(
-        socket: Socket,
-        handle: TorrentHandle,
-        torrentInfo: TorrentInfo,
-        fileIdx: Int,
-        targetFile: File,
-        fileSize: Long
-    ) = withContext(Dispatchers.IO) {
-        try {
-            socket.soTimeout = 30_000
-            val input = socket.getInputStream().bufferedReader(StandardCharsets.UTF_8)
-            val output = socket.getOutputStream()
+    private suspend fun handleHttpClient(socket: Socket, file: File, totalLength: Long) {
+        socket.use { s ->
+            val input = s.getInputStream().bufferedReader()
+            val out = s.getOutputStream()
+            val requestLine = input.readLine() ?: return
+            if (!requestLine.startsWith("GET")) return
 
-            val requestLine = input.readLine() ?: return@withContext
             var rangeHeader: String? = null
-            var line: String?
-            while (input.readLine().also { line = it } != null && line!!.isNotEmpty()) {
-                if (line!!.lowercase().startsWith("range:")) {
-                    rangeHeader = line!!.substringAfter(":").trim()
+            while (true) {
+                val line = input.readLine() ?: break
+                if (line.isBlank()) break
+                if (line.startsWith("Range:", ignoreCase = true)) {
+                    rangeHeader = line.substringAfter(":").trim()
                 }
             }
 
-            var startByte = 0L
-            var endByte = fileSize - 1L
-            var isPartial = false
-
-            if (rangeHeader != null && rangeHeader!!.startsWith("bytes=")) {
-                isPartial = true
-                val rangeSpec = rangeHeader!!.removePrefix("bytes=").split("-")
-                startByte = rangeSpec[0].toLongOrNull() ?: 0L
-                if (rangeSpec.size > 1 && rangeSpec[1].isNotEmpty()) {
-                    endByte = rangeSpec[1].toLongOrNull()?.coerceAtMost(fileSize - 1L) ?: (fileSize - 1L)
-                }
-            }
-
-            val contentLength = (endByte - startByte + 1L).coerceAtLeast(0L)
-            val mimeType = when {
-                targetFile.name.endsWith(".mp4", true) -> "video/mp4"
-                targetFile.name.endsWith(".webm", true) -> "video/webm"
-                else -> "video/x-matroska"
-            }
-
-            val headers = buildString {
-                if (isPartial) {
-                    append("HTTP/1.1 206 Partial Content\r\n")
-                    append("Content-Range: bytes $startByte-$endByte/$fileSize\r\n")
-                } else {
-                    append("HTTP/1.1 200 OK\r\n")
-                }
-                append("Content-Type: $mimeType\r\n")
-                append("Accept-Ranges: bytes\r\n")
-                append("Content-Length: $contentLength\r\n")
-                append("Connection: close\r\n\r\n")
-            }
-            output.write(headers.toByteArray(StandardCharsets.UTF_8))
-            output.flush()
-
-            if (requestLine.startsWith("HEAD")) return@withContext
-
-            val reqPiece = torrentInfo.mapFile(fileIdx, startByte, 1).piece()
-            val totalPieces = torrentInfo.numPieces()
-            for (p in reqPiece..(reqPiece + 10).coerceAtMost(totalPieces - 1)) {
-                if (handle.isValid && !handle.havePiece(p)) {
-                    handle.piecePriority(p, Priority.TOP_PRIORITY)
-                    handle.setPieceDeadline(p, (p - reqPiece) * 100)
-                }
-            }
-
-            var waitCount = 0
-            while (!targetFile.exists() && waitCount < 40 && !socket.isClosed) {
+            var waitTries = 0
+            while (!file.exists() && waitTries < 40) {
                 delay(250L)
-                waitCount++
+                waitTries++
             }
-            if (!targetFile.exists()) return@withContext
+            if (!file.exists()) return
 
-            RandomAccessFile(targetFile, "r").use { raf ->
-                var currentPos = startByte
-                val buffer = ByteArray(64 * 1024)
+            val fileLen = maxOf(totalLength, file.length())
+            var start = 0L
+            var end = fileLen - 1
 
-                while (currentPos <= endByte && !socket.isClosed && handle.isValid) {
-                    val piece = torrentInfo.mapFile(fileIdx, currentPos, 1).piece()
-                    var pieceWait = 0
-                    while (!handle.havePiece(piece) && pieceWait < 120 && !socket.isClosed && handle.isValid) {
-                        handle.piecePriority(piece, Priority.TOP_PRIORITY)
-                        handle.setPieceDeadline(piece, 50)
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                val spec = rangeHeader.removePrefix("bytes=")
+                val parts = spec.split("-")
+                start = parts.getOrNull(0)?.toLongOrNull() ?: 0L
+                val reqEnd = parts.getOrNull(1)?.toLongOrNull()
+                if (reqEnd != null && reqEnd < fileLen) {
+                    end = reqEnd
+                }
+            }
+
+            val contentLength = (end - start + 1).coerceAtLeast(0L)
+            val headers = buildString {
+                if (rangeHeader != null) {
+                    append("HTTP/1.1 206 Partial Content
+")
+                    append("Content-Range: bytes $start-$end/$fileLen
+")
+                } else {
+                    append("HTTP/1.1 200 OK
+")
+                }
+                append("Content-Type: video/mp4
+")
+                append("Accept-Ranges: bytes
+")
+                append("Content-Length: $contentLength
+")
+                append("Connection: close
+
+")
+            }
+            out.write(headers.toByteArray(Charsets.UTF_8))
+            out.flush()
+
+            RandomAccessFile(file, "r").use { raf ->
+                raf.seek(start)
+                val buf = ByteArray(64 * 1024)
+                var remaining = contentLength
+                while (remaining > 0) {
+                    val available = file.length() - raf.filePointer
+                    if (available <= 0L) {
                         delay(200L)
-                        pieceWait++
-                    }
-                    if (!handle.havePiece(piece)) break
-
-                    raf.seek(currentPos)
-                    val toRead = minOf(buffer.size.toLong(), endByte - currentPos + 1L).toInt()
-                    val read = raf.read(buffer, 0, toRead)
-                    if (read <= 0) {
-                        delay(100L)
                         continue
                     }
-                    output.write(buffer, 0, read)
-                    currentPos += read
+                    val toRead = minOf(buf.size.toLong(), remaining, available).toInt()
+                    val read = raf.read(buf, 0, toRead)
+                    if (read <= 0) break
+                    out.write(buf, 0, read)
+                    remaining -= read
                 }
-                output.flush()
+                out.flush()
             }
-        } catch (_: Exception) {
-            // Client disconnected or seeked to another offset
-        } finally {
-            runCatching { socket.close() }
         }
     }
 
-    fun stopCurrentStream(keepSession: Boolean = false) {
+    fun stop() {
         monitorJob?.cancel()
         serverJob?.cancel()
-        runCatching { serverSocket?.close() }
+        try {
+            serverSocket?.close()
+        } catch (_: Exception) {
+        }
         serverSocket = null
-
-        currentHandle?.let { h ->
-            runCatching {
-                if (h.isValid) {
-                    sessionManager?.remove(h)
-                }
-            }
+        try {
+            session?.stop()
+        } catch (_: Exception) {
         }
-        currentHandle = null
-        _status.value = TorrentStreamStatus(isActive = false)
-
-        if (!keepSession) {
-            runCatching {
-                sessionManager?.stop()
-                sessionManager = null
-            }
-            runCatching {
-                torrentCacheDir.listFiles()?.forEach { it.deleteRecursively() }
-            }
-        }
-    }
-
-    private fun appendPublicTrackers(magnet: String): String {
-        val trackers = listOf(
-            "udp://tracker.opentrackr.org:1337/announce",
-            "udp://open.stealth.si:80/announce",
-            "udp://tracker.torrent.eu.org:451/announce",
-            "udp://tracker.bittor.pw:1337/announce",
-            "udp://public.popcorn-tracker.org:6969/announce",
-            "udp://tracker.dler.org:6969/announce",
-            "udp://exodus.desync.com:6969/announce"
-        )
-        val sb = StringBuilder(magnet)
-        for (tr in trackers) {
-            if (!magnet.contains(tr)) {
-                sb.append("&tr=").append(java.net.URLEncoder.encode(tr, "UTF-8"))
-            }
-        }
-        return sb.toString()
+        session = null
+        _state.value = TorrentStreamState()
     }
 }
