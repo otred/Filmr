@@ -1,31 +1,24 @@
 package com.filmr.tv.data.remote
 
-import com.filmr.tv.domain.model.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
+import com.filmr.tv.data.model.*
+import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class StremioAddonService {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
         .followRedirects(true)
-        .followSslRedirects(true)
         .build()
 
     private fun getJson(url: String): JSONObject? = try {
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android TV) FilmrTV/1.5")
+            .header("User-Agent", "FilmrTV/2.0 (Android TV)")
             .build()
         client.newCall(req).execute().use { res ->
             if (!res.isSuccessful) return null
@@ -33,78 +26,63 @@ class StremioAddonService {
         }
     } catch (_: Exception) { null }
 
-    private fun postStremioApi(endpoint: String, payload: JSONObject): JSONObject? = try {
-        val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val req = Request.Builder().url("https://api.strem.io/api/$endpoint").post(body).build()
-        client.newCall(req).execute().use { res ->
-            res.body?.string()?.let { JSONObject(it) }
-        }
-    } catch (_: Exception) { null }
-
-    fun normalizeManifestUrl(raw: String): String {
-        val clean = raw.trim().replace("stremio://", "https://")
-        return if (clean.endsWith("/manifest.json")) clean else clean.trimEnd('/') + "/manifest.json"
-    }
-
     suspend fun fetchManifest(rawUrl: String): AddonEntity? = withContext(Dispatchers.IO) {
-        val url = normalizeManifestUrl(rawUrl)
-        val json = getJson(url) ?: return@withContext null
-        val id = json.optString("id").ifBlank { url }
-        val name = json.optString("name", "Stremio Addon")
-        val desc = json.optString("description", "")
-        val logo = json.optString("logo", "")
-        AddonEntity(id = id, name = name, url = url, description = desc, logoUrl = logo, type = "stremio")
-    }
-
-    suspend fun resolveImdbIdFromCinemeta(type: String, title: String): String = withContext(Dispatchers.IO) {
-        if (title.isBlank()) return@withContext ""
-        val encoded = URLEncoder.encode(title, "UTF-8")
-        val stremioType = if (type == "series") "series" else "movie"
-        val json = getJson("https://v3-cinemeta.strem.io/catalog/$stremioType/top/search=$encoded.json") ?: return@withContext ""
-        val metas = json.optJSONArray("metas") ?: return@withContext ""
-        if (metas.length() > 0) {
-            val id = metas.getJSONObject(0).optString("id")
-            if (id.startsWith("tt")) return@withContext id
-        }
-        ""
+        val clean = rawUrl.trim().replace("stremio://", "https://")
+        val manifestUrl = if (clean.endsWith("/manifest.json")) clean else "${clean.trimEnd('/')}/manifest.json"
+        val json = getJson(manifestUrl) ?: return@withContext null
+        val id = json.optString("id").ifBlank { manifestUrl.hashCode().toString() }
+        val name = json.optString("name", "إضافة Stremio")
+        val desc = json.optString("description")
+        val logo = json.optString("logo")
+        AddonEntity(
+            id = id,
+            name = name,
+            description = desc,
+            manifestUrl = manifestUrl,
+            logoUrl = logo,
+            type = "stremio",
+            isEnabled = true
+        )
     }
 
     suspend fun fetchAllAddonCatalogs(addons: List<AddonEntity>): List<AddonCatalogRow> = withContext(Dispatchers.IO) {
-        val stremioAddons = addons.filter { it.type == "stremio" && it.isEnabled && !it.url.contains("127.0.0.1") }
+        val stremioAddons = addons.filter { it.isEnabled && it.type == "stremio" && !it.manifestUrl.contains("127.0.0.1") }
         stremioAddons.map { addon ->
             async {
-                val rows = mutableListOf<AddonCatalogRow>()
-                val base = addon.url.removeSuffix("/manifest.json")
-                val manifest = getJson(addon.url) ?: return@async emptyList()
-                val catalogs = manifest.optJSONArray("catalogs") ?: return@async emptyList()
-                val limit = if (addon.id == "com.linvo.cinemeta") 2 else 3
-                for (i in 0 until minOf(catalogs.length(), limit)) {
-                    val cat = catalogs.getJSONObject(i)
-                    val catType = cat.optString("type", "movie")
-                    val catId = cat.optString("id")
-                    val extra = cat.optJSONArray("extra")
-                    var requiresSearch = false
-                    if (extra != null) {
-                        for (k in 0 until extra.length()) {
-                            val eObj = extra.getJSONObject(k)
-                            if (eObj.optBoolean("isRequired", false)) requiresSearch = true
+                withTimeoutOrNull(4500L) {
+                    val rows = mutableListOf<AddonCatalogRow>()
+                    val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
+                    val manifest = getJson(addon.manifestUrl) ?: return@withTimeoutOrNull emptyList()
+                    val catalogs = manifest.optJSONArray("catalogs") ?: return@withTimeoutOrNull emptyList()
+                    val limit = if (addon.id == "com.linvo.cinemeta") 2 else minOf(3, catalogs.length())
+                    for (i in 0 until limit) {
+                        val cat = catalogs.getJSONObject(i)
+                        val catType = cat.optString("type", "movie")
+                        val catId = cat.optString("id")
+                        val extra = cat.optJSONArray("extra")
+                        var requiresSearch = false
+                        if (extra != null) {
+                            for (k in 0 until extra.length()) {
+                                val eObj = extra.getJSONObject(k)
+                                if (eObj.optBoolean("isRequired", false)) requiresSearch = true
+                            }
+                        }
+                        if (catId.isBlank() || requiresSearch) continue
+                        val catJson = getJson("$base/catalog/$catType/$catId.json") ?: continue
+                        val metas = catJson.optJSONArray("metas") ?: continue
+                        val items = parseMetasArray(metas, catType, addon.name)
+                        if (items.isNotEmpty()) {
+                            val catTitle = cat.optString("name", catId)
+                            val rowHeader = if (addon.id == "com.linvo.cinemeta") {
+                                if (catType == "series") "مسلسلات رائجة • Cinemeta" else "أفلام رائجة • Cinemeta"
+                            } else {
+                                "${addon.name} • $catTitle"
+                            }
+                            rows.add(AddonCatalogRow(addon.id, addon.name, catId, rowHeader, "ar", items))
                         }
                     }
-                    if (catId.isBlank() || requiresSearch) continue
-                    val catJson = getJson("$base/catalog/$catType/$catId.json") ?: continue
-                    val metas = catJson.optJSONArray("metas") ?: continue
-                    val items = parseMetasArray(metas, catType, addon.name)
-                    if (items.isNotEmpty()) {
-                        val catTitle = cat.optString("name", catId)
-                        val rowHeader = if (addon.id == "com.linvo.cinemeta") {
-                            if (catType == "series") "مسلسلات شائعة • Cinemeta" else "أفلام شائعة • Cinemeta"
-                        } else {
-                            "${addon.name} • $catTitle"
-                        }
-                        rows.add(AddonCatalogRow(addon.id, addon.name, rowHeader, items))
-                    }
-                }
-                rows
+                    rows
+                } ?: emptyList()
             }
         }.awaitAll().flatten()
     }
@@ -112,165 +90,161 @@ class StremioAddonService {
     suspend fun searchAcrossAddons(addons: List<AddonEntity>, query: String): List<AddonCatalogRow> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        val activeAddons = addons.filter { it.type == "stremio" && it.isEnabled && !it.url.contains("127.0.0.1") }
+        val activeAddons = addons.filter { it.isEnabled && it.type == "stremio" && !it.manifestUrl.contains("127.0.0.1") }
         activeAddons.map { addon ->
             async {
-                val rows = mutableListOf<AddonCatalogRow>()
-                val base = addon.url.removeSuffix("/manifest.json")
-                val manifest = getJson(addon.url) ?: return@async emptyList()
-                val catalogs = manifest.optJSONArray("catalogs") ?: return@async emptyList()
-                for (i in 0 until catalogs.length()) {
-                    val cat = catalogs.getJSONObject(i)
-                    val catType = cat.optString("type", "movie")
-                    val catId = cat.optString("id")
-                    val extraSupported = cat.optJSONArray("extraSupported")?.toString().orEmpty()
-                    val extra = cat.optJSONArray("extra")?.toString().orEmpty()
-                    if (!extraSupported.contains("search") && !extra.contains("search")) continue
-                    val catJson = getJson("$base/catalog/$catType/$catId/search=$encoded.json") ?: continue
-                    val metas = catJson.optJSONArray("metas") ?: continue
-                    val items = parseMetasArray(metas, catType, addon.name)
-                    if (items.isNotEmpty()) {
-                        val typeLabel = if (catType == "series") "مسلسلات" else "أفلام"
-                        rows.add(AddonCatalogRow(addon.id, addon.name, "${addon.name} ($typeLabel)", items))
+                withTimeoutOrNull(4500L) {
+                    val rows = mutableListOf<AddonCatalogRow>()
+                    val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
+                    val manifest = getJson(addon.manifestUrl) ?: return@withTimeoutOrNull emptyList()
+                    val catalogs = manifest.optJSONArray("catalogs") ?: return@withTimeoutOrNull emptyList()
+                    for (i in 0 until minOf(2, catalogs.length())) {
+                        val cat = catalogs.getJSONObject(i)
+                        val catType = cat.optString("type", "movie")
+                        val catId = cat.optString("id")
+                        if (catId.isBlank()) continue
+                        val catJson = getJson("$base/catalog/$catType/$catId/search=$encoded.json") ?: continue
+                        val metas = catJson.optJSONArray("metas") ?: continue
+                        val items = parseMetasArray(metas, catType, addon.name)
+                        if (items.isNotEmpty()) {
+                            rows.add(AddonCatalogRow(addon.id, addon.name, catId, "نتائج ${addon.name}", "ar", items))
+                        }
                     }
-                }
-                rows
+                    rows
+                } ?: emptyList()
             }
         }.awaitAll().flatten()
     }
 
-    private fun parseMetasArray(metas: JSONArray, defaultType: String, addonName: String): List<MediaItem> {
-        val items = mutableListOf<MediaItem>()
-        for (j in 0 until minOf(metas.length(), 18)) {
-            val m = metas.getJSONObject(j)
+    suspend fun fetchStreams(addons: List<AddonEntity>, item: MediaItem, season: Int, episode: Int): List<UnifiedStream> = withContext(Dispatchers.IO) {
+        val active = addons.filter { it.isEnabled && it.type == "stremio" && !it.manifestUrl.contains("127.0.0.1") }
+        val stremioType = if (item.type == "series" || item.type == "tv") "series" else "movie"
+        val rawId = item.imdbId.ifBlank { item.id }
+        if (rawId.isBlank()) return@withContext emptyList()
+        val streamId = if (stremioType == "series") "$rawId:$season:$episode" else rawId
+        val encodedId = URLEncoder.encode(streamId, "UTF-8")
+
+        active.map { addon ->
+            async {
+                withTimeoutOrNull(6500L) {
+                    val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
+                    val json = getJson("$base/stream/$stremioType/$encodedId.json") ?: return@withTimeoutOrNull emptyList()
+                    val arr = json.optJSONArray("streams") ?: return@withTimeoutOrNull emptyList()
+                    val out = mutableListOf<UnifiedStream>()
+                    for (i in 0 until arr.length()) {
+                        val s = arr.getJSONObject(i)
+                        val infoHash = s.optString("infoHash")
+                        val rawUrl = s.optString("url")
+                        val finalUrl = when {
+                            rawUrl.isNotBlank() -> rawUrl
+                            infoHash.isNotBlank() -> "magnet:?xt=urn:btih:$infoHash"
+                            else -> ""
+                        }
+                        if (finalUrl.isBlank()) continue
+                        val name = s.optString("name", addon.name)
+                        val title = s.optString("title", s.optString("description", "رابط مشاهدة"))
+                        val combined = "$name $title"
+                        val q = when {
+                            combined.contains("2160", true) || combined.contains("4k", true) -> "4K"
+                            combined.contains("1080", true) -> "1080p"
+                            combined.contains("720", true) -> "720p"
+                            else -> "HD"
+                        }
+                        val score = when (q) { "4K" -> 2160; "1080p" -> 1080; "720p" -> 720; else -> 480 }
+                        val sizeMatch = Regex("""(\d+(?:\.\d+)?\s*(?:GB|MB))""", RegexOption.IGNORE_CASE).find(combined)
+                        val seedMatch = Regex("""👤\s*(\d+)|seeders?:\s*(\d+)""", RegexOption.IGNORE_CASE).find(combined)
+                        val seeders = (seedMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+                            ?: seedMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0)
+                        val isTorrent = finalUrl.startsWith("magnet:", true) || infoHash.isNotBlank()
+
+                        out.add(UnifiedStream(
+                            id = "${addon.id}_$i",
+                            name = name.replace("\n", " "),
+                            title = title,
+                            url = finalUrl,
+                            quality = q,
+                            qualityScore = score,
+                            addonName = addon.name,
+                            sourceType = if (isTorrent) "torrent" else "stremio",
+                            sizeText = sizeMatch?.value ?: "",
+                            seeders = seeders,
+                            isTorrent = isTorrent
+                        ))
+                    }
+                    out
+                } ?: emptyList()
+            }
+        }.awaitAll().flatten()
+    }
+
+    suspend fun fetchSubtitles(addons: List<AddonEntity>, item: MediaItem, season: Int, episode: Int): List<SubtitleTrack> = withContext(Dispatchers.IO) {
+        val active = addons.filter { it.isEnabled && it.type == "stremio" && !it.manifestUrl.contains("127.0.0.1") }
+        val stremioType = if (item.type == "series" || item.type == "tv") "series" else "movie"
+        val rawId = item.imdbId.ifBlank { item.id }
+        if (rawId.isBlank()) return@withContext emptyList()
+        val subId = if (stremioType == "series") "$rawId:$season:$episode" else rawId
+        val encodedId = URLEncoder.encode(subId, "UTF-8")
+
+        active.map { addon ->
+            async {
+                withTimeoutOrNull(4500L) {
+                    val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
+                    val json = getJson("$base/subtitles/$stremioType/$encodedId.json") ?: return@withTimeoutOrNull emptyList()
+                    val arr = json.optJSONArray("subtitles") ?: return@withTimeoutOrNull emptyList()
+                    val out = mutableListOf<SubtitleTrack>()
+                    for (i in 0 until arr.length()) {
+                        val sub = arr.getJSONObject(i)
+                        val url = sub.optString("url")
+                        if (url.isBlank()) continue
+                        val lang = sub.optString("lang", "ar")
+                        val label = when {
+                            lang.startsWith("ar", true) -> "العربية (${addon.name})"
+                            lang.startsWith("en", true) -> "English (${addon.name})"
+                            else -> "$lang (${addon.name})"
+                        }
+                        out.add(SubtitleTrack(
+                            id = "${addon.id}_sub_$i",
+                            label = label,
+                            language = lang,
+                            url = url,
+                            addonName = addon.name
+                        ))
+                    }
+                    out
+                } ?: emptyList()
+            }
+        }.awaitAll().flatten()
+    }
+
+    private fun parseMetasArray(arr: org.json.JSONArray, defaultType: String, addonName: String): List<MediaItem> {
+        val list = mutableListOf<MediaItem>()
+        for (i in 0 until minOf(25, arr.length())) {
+            val m = arr.optJSONObject(i) ?: continue
             val id = m.optString("id")
             if (id.isBlank()) continue
-            val type = m.optString("type", defaultType)
-            val genresList = mutableListOf<String>()
-            m.optJSONArray("genres")?.let { g -> for (k in 0 until g.length()) genresList.add(g.getString(k)) }
-            items.add(
-                MediaItem(
-                    id = id,
-                    imdbId = if (id.startsWith("tt")) id else "",
-                    type = if (type == "series") "series" else "movie",
-                    titleAr = m.optString("name"),
-                    titleEn = m.optString("name"),
-                    posterUrl = m.optString("poster"),
-                    backdropUrl = m.optString("background"),
-                    logoUrl = m.optString("logo"),
-                    overviewAr = m.optString("description"),
-                    rating = m.optString("imdbRating").toDoubleOrNull() ?: 0.0,
-                    year = m.optString("releaseInfo").take(4),
-                    genres = genresList,
-                    sourceAddon = addonName
-                )
-            )
+            val name = m.optString("name")
+            val poster = m.optString("poster")
+            val bg = m.optString("background")
+            val logo = m.optString("logo")
+            val desc = m.optString("description")
+            val year = m.optString("releaseInfo").take(4)
+            val imdbRating = m.optString("imdbRating")
+            list.add(MediaItem(
+                id = id,
+                imdbId = if (id.startsWith("tt")) id else "",
+                type = m.optString("type", defaultType),
+                titleAr = name,
+                titleEn = name,
+                posterUrl = poster,
+                backdropUrl = bg.ifBlank { poster },
+                logoUrl = logo,
+                overviewAr = desc,
+                year = year,
+                rating = imdbRating.toDoubleOrNull() ?: 0.0,
+                imdbRating = imdbRating,
+                sourceAddon = addonName
+            ))
         }
-        return items
-    }
-
-    suspend fun fetchStreams(addons: List<AddonEntity>, type: String, mediaId: String, torrentEnabled: Boolean): List<UnifiedStream> = withContext(Dispatchers.IO) {
-        val stremioType = if (type == "series") "series" else "movie"
-        val encodedId = URLEncoder.encode(mediaId, "UTF-8")
-        val stremioAddons = addons.filter { it.type == "stremio" && it.isEnabled && !it.url.contains("127.0.0.1") }
-        stremioAddons.map { addon ->
-            async {
-                val base = addon.url.removeSuffix("/manifest.json")
-                val json = getJson("$base/stream/$stremioType/$encodedId.json") ?: return@async emptyList()
-                val arr = json.optJSONArray("streams") ?: return@async emptyList()
-                val list = mutableListOf<UnifiedStream>()
-                for (i in 0 until arr.length()) {
-                    val s = arr.getJSONObject(i)
-                    val directUrl = s.optString("url")
-                    val infoHash = s.optString("infoHash")
-                    val isTorrent = directUrl.startsWith("magnet:") || infoHash.isNotBlank()
-                    if (isTorrent && !torrentEnabled) continue
-                    val finalUrl = when {
-                        directUrl.isNotBlank() -> directUrl
-                        infoHash.isNotBlank() -> "magnet:?xt=urn:btih:$infoHash"
-                        else -> ""
-                    }
-                    if (finalUrl.isBlank()) continue
-                    val name = s.optString("name", addon.name)
-                    val title = s.optString("title", s.optString("description", name))
-                    val combined = "$name $title".lowercase()
-                    val (qLabel, qScore) = when {
-                        "2160" in combined || "4k" in combined -> "4K" to 2160
-                        "1080" in combined -> "1080p" to 1080
-                        "720" in combined -> "720p" to 720
-                        else -> "HD" to 480
-                    }
-                    val headers = mutableMapOf<String, String>()
-                    s.optJSONObject("behaviorHints")?.optJSONObject("proxyHeaders")?.optJSONObject("request")?.let { reqH ->
-                        reqH.keys().forEach { k -> headers[k] = reqH.optString(k) }
-                    }
-                    list.add(UnifiedStream("${addon.id}_$i", name, title, finalUrl, qLabel, qScore, addon.name, "stremio", isTorrent, headers))
-                }
-                list
-            }
-        }.awaitAll().flatten().sortedByDescending { it.qualityScore }
-    }
-
-    suspend fun fetchSubtitles(addons: List<AddonEntity>, type: String, mediaId: String): List<SubtitleTrack> = withContext(Dispatchers.IO) {
-        val stremioType = if (type == "series") "series" else "movie"
-        val encodedId = URLEncoder.encode(mediaId, "UTF-8")
-        val tracks = mutableListOf<SubtitleTrack>()
-        for (addon in addons.filter { it.type == "stremio" && it.isEnabled && !it.url.contains("127.0.0.1") }) {
-            val base = addon.url.removeSuffix("/manifest.json")
-            val json = getJson("$base/subtitles/$stremioType/$encodedId.json") ?: continue
-            val arr = json.optJSONArray("subtitles") ?: continue
-            for (i in 0 until arr.length()) {
-                val sub = arr.getJSONObject(i)
-                val url = sub.optString("url")
-                val lang = sub.optString("lang", "ar")
-                if (url.isNotBlank()) {
-                    tracks.add(SubtitleTrack("${addon.id}_$i", url, lang, "${addon.name} ($lang)"))
-                }
-            }
-        }
-        tracks.sortedByDescending { it.lang.startsWith("ar", ignoreCase = true) }
-    }
-
-    suspend fun loginStremio(email: String, pass: String): UserSessionEntity? = withContext(Dispatchers.IO) {
-        val res = postStremioApi("login", JSONObject().put("email", email.trim()).put("password", pass)) ?: return@withContext null
-        val result = res.optJSONObject("result") ?: return@withContext null
-        val authKey = result.optString("authKey")
-        if (authKey.isBlank()) return@withContext null
-        val user = result.optJSONObject("user")
-        UserSessionEntity(1, authKey, email.trim(), user?.optString("fullname", email) ?: email, user?.optString("avatar", "") ?: "")
-    }
-
-    suspend fun fetchUserAddonsFromAccount(authKey: String): List<AddonEntity> = withContext(Dispatchers.IO) {
-        val res = postStremioApi("addonCollectionGet", JSONObject().put("authKey", authKey)) ?: return@withContext emptyList()
-        val addons = res.optJSONObject("result")?.optJSONArray("addons") ?: return@withContext emptyList()
-        val list = mutableListOf<AddonEntity>()
-        for (i in 0 until addons.length()) {
-            val obj = addons.getJSONObject(i)
-            val url = obj.optString("transportUrl")
-            val manifest = obj.optJSONObject("manifest")
-            if (url.isNotBlank() && manifest != null) {
-                list.add(AddonEntity(manifest.optString("id", url), manifest.optString("name", "Addon"), url, "", manifest.optString("description"), manifest.optString("logo"), "stremio", true, i))
-            }
-        }
-        list
-    }
-
-    suspend fun fetchUserLibraryFromAccount(authKey: String): List<LibraryItemEntity> = withContext(Dispatchers.IO) {
-        val res = postStremioApi("datastoreGet", JSONObject().put("authKey", authKey).put("collection", "libraryItem").put("all", true)) ?: return@withContext emptyList()
-        val arr = res.optJSONArray("result") ?: return@withContext emptyList()
-        val list = mutableListOf<LibraryItemEntity>()
-        for (i in 0 until arr.length()) {
-            val item = arr.getJSONObject(i)
-            if (item.optBoolean("removed", false)) continue
-            val id = item.optString("_id")
-            if (id.isBlank()) continue
-            list.add(LibraryItemEntity(id, if (id.startsWith("tt")) id else "", 0, item.optString("type", "movie"), item.optString("name"), item.optString("name"), item.optString("poster"), item.optString("background"), "", "", 0.0, item.optString("year"), true))
-        }
-        list
-    }
-
-    suspend fun pushLibraryItemToAccount(authKey: String, item: LibraryItemEntity, remove: Boolean) = withContext(Dispatchers.IO) {
-        val change = JSONObject().put("_id", item.id).put("name", item.titleEn.ifBlank { item.titleAr }).put("type", item.type).put("poster", item.posterUrl).put("removed", remove)
-        postStremioApi("datastorePut", JSONObject().put("authKey", authKey).put("collection", "libraryItem").put("changes", JSONArray().put(change)))
+        return list
     }
 }
