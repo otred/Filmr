@@ -87,18 +87,26 @@ class CatalogCacheStore(context: Context) {
     fun saveSettings(s: AppSettings) {
         val obj = JSONObject().apply {
             put("tmdbEnabled", s.tmdbEnabled)
+            put("tmdbApplyHome", s.tmdbApplyHome)
+            put("tmdbApplyContinue", s.tmdbApplyContinue)
             put("tmdbLanguage", s.tmdbLanguage)
             put("tmdbArtwork", s.tmdbArtwork)
             put("tmdbBasicInfo", s.tmdbBasicInfo)
+            put("tmdbDetails", s.tmdbDetails)
             put("tmdbCast", s.tmdbCast)
             put("tmdbCompanies", s.tmdbCompanies)
             put("tmdbNetworks", s.tmdbNetworks)
             put("tmdbEpisodes", s.tmdbEpisodes)
+            put("tmdbTrailers", s.tmdbTrailers)
             put("tmdbRecommendations", s.tmdbRecommendations)
+            put("autoTranslateArabic", s.autoTranslateArabic)
+            put("mdbListEnabled", s.mdbListEnabled)
             put("mdbListApiKey", s.mdbListApiKey)
+            put("mdbShowOnHero", s.mdbShowOnHero)
             put("showImdbRating", s.showImdbRating)
             put("showTmdbRating", s.showTmdbRating)
             put("showRtRating", s.showRtRating)
+            put("showAudienceRating", s.showAudienceRating)
             put("showMcRating", s.showMcRating)
             put("showLbRating", s.showLbRating)
             put("showMalRating", s.showMalRating)
@@ -108,12 +116,14 @@ class CatalogCacheStore(context: Context) {
             put("preferEnglishTitles", s.preferEnglishTitles)
             put("showContinueWatching", s.showContinueWatching)
             put("autoPlayNextEpisode", s.autoPlayNextEpisode)
-            put("subtitleFontSize", s.subtitleFontSize.toDouble())
+            put("subtitleFontPercent", s.subtitleFontPercent)
             put("subtitleBold", s.subtitleBold)
+            put("subtitleItalic", s.subtitleItalic)
             put("subtitleColorHex", s.subtitleColorHex)
-            put("subtitleBgOpacity", s.subtitleBgOpacity.toDouble())
+            put("subtitleTextOpacity", s.subtitleTextOpacity)
+            put("subtitleBgOpacity", s.subtitleBgOpacity)
             put("subtitleOutline", s.subtitleOutline)
-            put("subtitleBottomPadding", s.subtitleBottomPadding.toDouble())
+            put("subtitleDelayMs", s.subtitleDelayMs)
         }
         prefs.edit().putString("settings_json", obj.toString()).apply()
     }
@@ -124,18 +134,26 @@ class CatalogCacheStore(context: Context) {
             val o = JSONObject(raw)
             AppSettings(
                 tmdbEnabled = o.optBoolean("tmdbEnabled", true),
+                tmdbApplyHome = o.optBoolean("tmdbApplyHome", true),
+                tmdbApplyContinue = o.optBoolean("tmdbApplyContinue", true),
                 tmdbLanguage = o.optString("tmdbLanguage", "ar-SA"),
                 tmdbArtwork = o.optBoolean("tmdbArtwork", true),
                 tmdbBasicInfo = o.optBoolean("tmdbBasicInfo", true),
+                tmdbDetails = o.optBoolean("tmdbDetails", true),
                 tmdbCast = o.optBoolean("tmdbCast", true),
                 tmdbCompanies = o.optBoolean("tmdbCompanies", true),
                 tmdbNetworks = o.optBoolean("tmdbNetworks", true),
                 tmdbEpisodes = o.optBoolean("tmdbEpisodes", true),
+                tmdbTrailers = o.optBoolean("tmdbTrailers", true),
                 tmdbRecommendations = o.optBoolean("tmdbRecommendations", true),
+                autoTranslateArabic = o.optBoolean("autoTranslateArabic", true),
+                mdbListEnabled = o.optBoolean("mdbListEnabled", true),
                 mdbListApiKey = o.optString("mdbListApiKey", ""),
+                mdbShowOnHero = o.optBoolean("mdbShowOnHero", true),
                 showImdbRating = o.optBoolean("showImdbRating", true),
                 showTmdbRating = o.optBoolean("showTmdbRating", true),
                 showRtRating = o.optBoolean("showRtRating", true),
+                showAudienceRating = o.optBoolean("showAudienceRating", true),
                 showMcRating = o.optBoolean("showMcRating", true),
                 showLbRating = o.optBoolean("showLbRating", true),
                 showMalRating = o.optBoolean("showMalRating", true),
@@ -145,12 +163,14 @@ class CatalogCacheStore(context: Context) {
                 preferEnglishTitles = o.optBoolean("preferEnglishTitles", false),
                 showContinueWatching = o.optBoolean("showContinueWatching", true),
                 autoPlayNextEpisode = o.optBoolean("autoPlayNextEpisode", true),
-                subtitleFontSize = o.optDouble("subtitleFontSize", 22.0).toFloat(),
+                subtitleFontPercent = o.optInt("subtitleFontPercent", 100),
                 subtitleBold = o.optBoolean("subtitleBold", true),
+                subtitleItalic = o.optBoolean("subtitleItalic", false),
                 subtitleColorHex = o.optLong("subtitleColorHex", 0xFFFFFFFF),
-                subtitleBgOpacity = o.optDouble("subtitleBgOpacity", 0.55).toFloat(),
+                subtitleTextOpacity = o.optInt("subtitleTextOpacity", 100),
+                subtitleBgOpacity = o.optInt("subtitleBgOpacity", 40),
                 subtitleOutline = o.optBoolean("subtitleOutline", true),
-                subtitleBottomPadding = o.optDouble("subtitleBottomPadding", 42.0).toFloat()
+                subtitleDelayMs = o.optLong("subtitleDelayMs", 0L)
             )
         } catch (_: Exception) {
             AppSettings()
@@ -182,6 +202,7 @@ class CatalogCacheStore(context: Context) {
                         put("year", m.year)
                         put("rating", m.rating)
                         put("imdbRating", m.imdbRating)
+                        put("tmdbRating", m.tmdbRating)
                         put("sourceAddon", m.sourceAddon)
                     })
                 }
@@ -218,6 +239,7 @@ class CatalogCacheStore(context: Context) {
                             year = m.optString("year"),
                             rating = m.optDouble("rating", 0.0),
                             imdbRating = m.optString("imdbRating"),
+                            tmdbRating = m.optString("tmdbRating"),
                             sourceAddon = m.optString("sourceAddon")
                         )
                     )

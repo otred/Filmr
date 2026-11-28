@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.filmr.tv.data.local.CatalogCacheStore
 import com.filmr.tv.data.local.FilmrDatabase
 import com.filmr.tv.data.model.*
+import com.filmr.tv.data.remote.AutoTranslateService
 import com.filmr.tv.data.remote.CloudStreamRepoService
 import com.filmr.tv.data.remote.StremioAddonService
 import com.filmr.tv.data.remote.TmdbMetadataService
@@ -52,8 +53,11 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
     private val _personDetails = MutableStateFlow<PersonDetails?>(null)
     val personDetails: StateFlow<PersonDetails?> = _personDetails.asStateFlow()
 
-    private val _companyItems = MutableStateFlow<List<MediaItem>>(emptyList())
-    val companyItems: StateFlow<List<MediaItem>> = _companyItems.asStateFlow()
+    private val _companyTopItems = MutableStateFlow<List<MediaItem>>(emptyList())
+    val companyTopItems: StateFlow<List<MediaItem>> = _companyTopItems.asStateFlow()
+
+    private val _companyRecentItems = MutableStateFlow<List<MediaItem>>(emptyList())
+    val companyRecentItems: StateFlow<List<MediaItem>> = _companyRecentItems.asStateFlow()
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
@@ -116,6 +120,13 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun translateTextForHero(text: String, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            val res = AutoTranslateService.translateToArabicIfNeeded(text, _settings.value.autoTranslateArabic)
+            onResult(res)
+        }
+    }
+
     fun updateSettings(newSettings: AppSettings) {
         _settings.value = newSettings
         cache.saveSettings(newSettings)
@@ -134,7 +145,12 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
         val current = _selectedItem.value ?: return
         if (current.tmdbId == 0) return
         viewModelScope.launch {
-            val eps = tmdbService.fetchSeasonEpisodes(current.tmdbId, season, _settings.value.tmdbLanguage)
+            val eps = tmdbService.fetchSeasonEpisodes(
+                current.tmdbId,
+                season,
+                _settings.value.tmdbLanguage,
+                _settings.value.autoTranslateArabic
+            )
             if (eps.isNotEmpty()) {
                 _selectedItem.value = current.copy(episodes = eps)
             }
@@ -146,9 +162,18 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
             _isLoadingStreams.value = true
             _streams.value = emptyList()
             try {
+                val resolvedImdb = tmdbService.resolveImdbIdOnly(item)
+                val queryItem = if (resolvedImdb.startsWith("tt") && item.imdbId != resolvedImdb) {
+                    item.copy(imdbId = resolvedImdb).also {
+                        if (_selectedItem.value?.id == item.id) {
+                            _selectedItem.value = _selectedItem.value?.copy(imdbId = resolvedImdb)
+                        }
+                    }
+                } else item
+
                 val currentAddons = dao.getAllAddons()
-                val stremioStreams = stremioService.fetchStreams(currentAddons, item, season, episode)
-                val csStreams = cloudStreamService.buildCloudStreamSources(currentAddons, item, season, episode)
+                val stremioStreams = stremioService.fetchStreams(currentAddons, queryItem, season, episode)
+                val csStreams = cloudStreamService.buildCloudStreamSources(currentAddons, queryItem, season, episode)
                 val all = (stremioStreams + csStreams).sortedByDescending { it.qualityScore }
                 _streams.value = all
             } finally {
@@ -159,8 +184,10 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadSubtitlesForPlayback(item: MediaItem, season: Int = 1, episode: Int = 1) {
         viewModelScope.launch {
+            val resolvedImdb = tmdbService.resolveImdbIdOnly(item)
+            val queryItem = if (resolvedImdb.startsWith("tt")) item.copy(imdbId = resolvedImdb) else item
             val currentAddons = dao.getAllAddons()
-            _subtitles.value = stremioService.fetchSubtitles(currentAddons, item, season, episode)
+            _subtitles.value = stremioService.fetchSubtitles(currentAddons, queryItem, season, episode)
         }
     }
 
@@ -178,7 +205,14 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
                 val addonRows = stremioService.searchAcrossAddons(currentAddons, query)
                 val rows = mutableListOf<AddonCatalogRow>()
                 if (tmdbItems.isNotEmpty()) {
-                    rows.add(AddonCatalogRow("tmdb", "TMDB", "search", "نتائج البحث في TMDB", "ar", tmdbItems))
+                    val movies = tmdbItems.filter { it.type == "movie" }
+                    val series = tmdbItems.filter { it.type != "movie" }
+                    if (movies.isNotEmpty()) {
+                        rows.add(AddonCatalogRow("tmdb", "TMDB", "search_movies", "فيلم - Search • TMDB", "ar", movies))
+                    }
+                    if (series.isNotEmpty()) {
+                        rows.add(AddonCatalogRow("tmdb", "TMDB", "search_series", "مسلسل - Search • TMDB", "ar", series))
+                    }
                 }
                 rows.addAll(addonRows)
                 _searchResults.value = rows
@@ -225,8 +259,8 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleLibrary(item: MediaItem) {
         viewModelScope.launch {
-            val exists = library.value.any { it.mediaId == item.id }
-            if (exists) {
+            val existing = library.value.find { it.mediaId == item.id }
+            if (existing != null) {
                 dao.deleteLibrary(item.id)
                 _statusMessage.value = "تمت الإزالة من المكتبة"
             } else {
@@ -239,11 +273,33 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
                         posterUrl = item.posterUrl,
                         backdropUrl = item.backdropUrl,
                         year = item.year,
-                        rating = item.rating
+                        rating = item.rating,
+                        isWatched = false
                     )
                 )
                 _statusMessage.value = "تمت الإضافة إلى المكتبة"
             }
+        }
+    }
+
+    fun toggleWatched(item: MediaItem) {
+        viewModelScope.launch {
+            val existing = library.value.find { it.mediaId == item.id }
+            val newWatched = !(existing?.isWatched ?: false)
+            dao.upsertLibrary(
+                LibraryEntity(
+                    mediaId = item.id,
+                    imdbId = item.imdbId,
+                    type = item.type,
+                    title = item.displayTitle(_settings.value.preferEnglishTitles),
+                    posterUrl = item.posterUrl,
+                    backdropUrl = item.backdropUrl,
+                    year = item.year,
+                    rating = item.rating,
+                    isWatched = newWatched
+                )
+            )
+            _statusMessage.value = if (newWatched) "تم التحديد كـ تمت المشاهدة ✓" else "تم إلغاء علامة المشاهدة"
         }
     }
 
@@ -272,14 +328,22 @@ class FilmrViewModel(application: Application) : AndroidViewModel(application) {
     fun openPerson(personId: Int) {
         _personDetails.value = null
         viewModelScope.launch {
-            _personDetails.value = tmdbService.fetchPersonDetails(personId, _settings.value.tmdbLanguage)
+            _personDetails.value = tmdbService.fetchPersonDetails(
+                personId,
+                _settings.value.tmdbLanguage,
+                _settings.value.autoTranslateArabic
+            )
         }
     }
 
-    fun openCompany(company: CompanyItem, sortBy: String = "popularity.desc") {
-        _companyItems.value = emptyList()
+    fun openCompany(company: CompanyItem) {
+        _companyTopItems.value = emptyList()
+        _companyRecentItems.value = emptyList()
         viewModelScope.launch {
-            _companyItems.value = tmdbService.discoverByCompanyOrNetwork(company, sortBy, _settings.value.tmdbLanguage)
+            val topDeferred = async { tmdbService.discoverByCompanyOrNetwork(company, "vote_average.desc", _settings.value.tmdbLanguage) }
+            val recentDeferred = async { tmdbService.discoverByCompanyOrNetwork(company, "primary_release_date.desc", _settings.value.tmdbLanguage) }
+            _companyTopItems.value = topDeferred.await()
+            _companyRecentItems.value = recentDeferred.await()
         }
     }
 

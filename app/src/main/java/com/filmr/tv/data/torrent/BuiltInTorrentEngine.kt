@@ -6,13 +6,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
+import org.libtorrent4j.SessionParams
+import org.libtorrent4j.SettingsPack
 import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
+import org.libtorrent4j.swig.settings_pack
 import java.io.File
 import java.io.RandomAccessFile
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLEncoder
 
 data class TorrentStreamState(
     val statusText: String = "",
@@ -33,9 +37,31 @@ class BuiltInTorrentEngine(private val context: Context) {
     private val _state = MutableStateFlow(TorrentStreamState())
     val state: StateFlow<TorrentStreamState> = _state
 
+    private val defaultTrackers = listOf(
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.stealth.si:80/announce",
+        "udp://tracker.torrent.eu.org:451/announce",
+        "udp://exodus.desync.com:6969/announce",
+        "udp://tracker.moeking.me:6969/announce",
+        "udp://explodie.org:6969/announce",
+        "udp://tracker1.bt.moack.co.kr:80/announce",
+        "http://tracker.opentrackr.org:1337/announce"
+    )
+
+    private fun enrichMagnetWithTrackers(rawMagnet: String): String {
+        val sb = StringBuilder(rawMagnet.trim())
+        for (tr in defaultTrackers) {
+            val enc = URLEncoder.encode(tr, "UTF-8")
+            if (!rawMagnet.contains(enc, ignoreCase = true) && !rawMagnet.contains(tr, ignoreCase = true)) {
+                sb.append("&tr=").append(enc)
+            }
+        }
+        return sb.toString()
+    }
+
     fun startMagnetStream(magnetUri: String) {
         stop()
-        _state.value = TorrentStreamState(statusText = "جاري تشغيل محرك التورنت المدمج...")
+        _state.value = TorrentStreamState(statusText = "جاري تشغيل محرك التورنت المدمج (P2P)...")
 
         monitorJob = scope.launch {
             try {
@@ -43,14 +69,28 @@ class BuiltInTorrentEngine(private val context: Context) {
                     if (exists()) deleteRecursively()
                     mkdirs()
                 }
+
+                val sp = SettingsPack().apply {
+                    setBoolean(settings_pack.bool_types.enable_dht.swigValue(), true)
+                    setBoolean(settings_pack.bool_types.enable_lsd.swigValue(), true)
+                    setBoolean(settings_pack.bool_types.enable_upnp.swigValue(), true)
+                    setBoolean(settings_pack.bool_types.enable_natpmp.swigValue(), true)
+                    setString(
+                        settings_pack.string_types.dht_bootstrap_nodes.swigValue(),
+                        "router.bittorrent.com:6881,router.utorrent.com:6881,dht.transmissionbt.com:6881,dht.aelitis.com:6881"
+                    )
+                }
+
                 val mgr = SessionManager()
                 session = mgr
-                mgr.start()
+                mgr.start(SessionParams(sp))
 
-                _state.value = _state.value.copy(statusText = "جاري جلب بيانات التورنت...")
-                val metadataBytes = mgr.fetchMagnet(magnetUri, 30, baseDir)
+                val enrichedMagnet = enrichMagnetWithTrackers(magnetUri)
+                _state.value = _state.value.copy(statusText = "جاري الاتصال بالشبكة وجلب بيانات التورنت...")
+
+                val metadataBytes = mgr.fetchMagnet(enrichedMagnet, 45, baseDir)
                 if (metadataBytes == null || metadataBytes.isEmpty()) {
-                    _state.value = TorrentStreamState(error = "تعذر العثور على مصادر نشطة لهذا التورنت")
+                    _state.value = TorrentStreamState(error = "تعذر العثور على مصادر (Seeders) نشطة لهذا التورنت، جرّب رابطاً آخر")
                     return@launch
                 }
 
@@ -58,7 +98,7 @@ class BuiltInTorrentEngine(private val context: Context) {
                 val filesCount = torrentInfo.numFiles()
                 var bestIndex = 0
                 var bestSize = -1L
-                val videoExts = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov")
+                val videoExts = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov", ".m4v")
 
                 for (i in 0 until filesCount) {
                     val path = torrentInfo.files().filePath(i).lowercase()
@@ -85,11 +125,20 @@ class BuiltInTorrentEngine(private val context: Context) {
                     return@launch
                 }
 
+                for (tr in defaultTrackers) {
+                    try {
+                        handle.addTracker(org.libtorrent4j.AnnounceEntry(tr))
+                    } catch (_: Exception) {
+                    }
+                }
+
                 val priorities = Array(filesCount) { idx ->
                     if (idx == bestIndex) Priority.TOP_PRIORITY else Priority.IGNORE
                 }
                 handle.prioritizeFiles(priorities)
                 handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+                handle.forceReannounce()
+                handle.forceDHTAnnounce()
 
                 val targetFile = File(baseDir, torrentInfo.files().filePath(bestIndex))
                 val port = startLocalHttpServer(targetFile, bestSize)
@@ -103,7 +152,7 @@ class BuiltInTorrentEngine(private val context: Context) {
                     val peersCount = st.numPeers()
                     val existingBytes = if (targetFile.exists()) targetFile.length() else 0L
 
-                    if (!announcedReady && (existingBytes > 4 * 1024 * 1024L || prog >= 3)) {
+                    if (!announcedReady && (existingBytes > 3 * 1024 * 1024L || prog >= 2)) {
                         announcedReady = true
                         _state.value = TorrentStreamState(
                             statusText = "جاري البث المباشر",
@@ -166,7 +215,7 @@ class BuiltInTorrentEngine(private val context: Context) {
             }
 
             var waitTries = 0
-            while (!file.exists() && waitTries < 40) {
+            while (!file.exists() && waitTries < 60) {
                 delay(250L)
                 waitTries++
             }

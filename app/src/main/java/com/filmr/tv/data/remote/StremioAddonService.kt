@@ -11,8 +11,8 @@ import java.util.concurrent.TimeUnit
 
 class StremioAddonService {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -52,7 +52,7 @@ class StremioAddonService {
         val stremioAddons = addons.filter { it.isEnabled && it.type == "stremio" && !it.manifestUrl.contains("127.0.0.1") }
         stremioAddons.map { addon ->
             async {
-                withTimeoutOrNull(4500L) {
+                withTimeoutOrNull(5500L) {
                     val rows = mutableListOf<AddonCatalogRow>()
                     val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
                     val manifest = getJson(addon.manifestUrl) ?: return@withTimeoutOrNull emptyList()
@@ -77,9 +77,9 @@ class StremioAddonService {
                         if (items.isNotEmpty()) {
                             val catTitle = cat.optString("name", catId)
                             val rowHeader = if (addon.id == "com.linvo.cinemeta") {
-                                if (catType == "series") "مسلسلات رائجة • Cinemeta" else "أفلام رائجة • Cinemeta"
+                                if (catType == "series") "مسلسل - Popular" else "فيلم - Popular"
                             } else {
-                                "${addon.name} • $catTitle"
+                                "$catTitle • ${addon.name}"
                             }
                             rows.add(AddonCatalogRow(addon.id, addon.name, catId, rowHeader, "ar", items))
                         }
@@ -96,7 +96,7 @@ class StremioAddonService {
         val activeAddons = addons.filter { it.isEnabled && it.type == "stremio" && !it.manifestUrl.contains("127.0.0.1") }
         activeAddons.map { addon ->
             async {
-                withTimeoutOrNull(4500L) {
+                withTimeoutOrNull(5500L) {
                     val rows = mutableListOf<AddonCatalogRow>()
                     val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
                     val manifest = getJson(addon.manifestUrl) ?: return@withTimeoutOrNull emptyList()
@@ -110,7 +110,8 @@ class StremioAddonService {
                         val metas = catJson.optJSONArray("metas") ?: continue
                         val items = parseMetasArray(metas, catType, addon.name)
                         if (items.isNotEmpty()) {
-                            rows.add(AddonCatalogRow(addon.id, addon.name, catId, "نتائج ${addon.name}", "ar", items))
+                            val typeAr = if (catType == "series") "مسلسل" else "فيلم"
+                            rows.add(AddonCatalogRow(addon.id, addon.name, catId, "$typeAr - Search • ${addon.name}", "ar", items))
                         }
                     }
                     rows
@@ -131,23 +132,39 @@ class StremioAddonService {
 
         active.map { addon ->
             async {
-                withTimeoutOrNull(6500L) {
+                withTimeoutOrNull(8500L) {
                     val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
                     val json = getJson("$base/stream/$stremioType/$encodedId.json") ?: return@withTimeoutOrNull emptyList()
                     val arr = json.optJSONArray("streams") ?: return@withTimeoutOrNull emptyList()
                     val out = mutableListOf<UnifiedStream>()
                     val nl = 10.toChar().toString()
                     val cr = 13.toChar().toString()
+
                     for (i in 0 until arr.length()) {
                         val s = arr.getJSONObject(i)
                         val infoHash = s.optString("infoHash")
                         val rawUrl = s.optString("url")
+                        val sourcesArr = s.optJSONArray("sources")
+
                         val finalUrl = when {
                             rawUrl.isNotBlank() -> rawUrl
-                            infoHash.isNotBlank() -> "magnet:?xt=urn:btih:$infoHash"
+                            infoHash.isNotBlank() -> {
+                                val sb = StringBuilder("magnet:?xt=urn:btih:$infoHash")
+                                if (sourcesArr != null) {
+                                    for (k in 0 until sourcesArr.length()) {
+                                        val src = sourcesArr.optString(k)
+                                        if (src.startsWith("tracker:")) {
+                                            val tr = src.removePrefix("tracker:")
+                                            sb.append("&tr=").append(URLEncoder.encode(tr, "UTF-8"))
+                                        }
+                                    }
+                                }
+                                sb.toString()
+                            }
                             else -> ""
                         }
                         if (finalUrl.isBlank()) continue
+
                         val name = s.optString("name", addon.name).replace(nl, " ").replace(cr, " ")
                         val title = s.optString("title", s.optString("description", "رابط مشاهدة"))
                         val combined = "$name $title"
@@ -200,7 +217,7 @@ class StremioAddonService {
 
         active.map { addon ->
             async {
-                withTimeoutOrNull(4500L) {
+                withTimeoutOrNull(5500L) {
                     val base = addon.manifestUrl.removeSuffix("/manifest.json").trimEnd('/')
                     val json = getJson("$base/subtitles/$stremioType/$encodedId.json") ?: return@withTimeoutOrNull emptyList()
                     val arr = json.optJSONArray("subtitles") ?: return@withTimeoutOrNull emptyList()
@@ -210,11 +227,7 @@ class StremioAddonService {
                         val url = sub.optString("url")
                         if (url.isBlank()) continue
                         val lang = sub.optString("lang", "ar")
-                        val label = when {
-                            lang.startsWith("ar", true) -> "العربية (${addon.name})"
-                            lang.startsWith("en", true) -> "English (${addon.name})"
-                            else -> "$lang (${addon.name})"
-                        }
+                        val label = sub.optString("title").ifBlank { "${addon.name} • $lang" }
                         out.add(
                             SubtitleTrack(
                                 id = "${addon.id}_sub_$i",

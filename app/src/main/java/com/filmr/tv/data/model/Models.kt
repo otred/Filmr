@@ -16,21 +16,26 @@ data class MediaItem(
     val logoUrl: String = "",
     val overviewAr: String = "",
     val year: String = "",
+    val releaseDate: String = "",
+    val ageRating: String = "",
+    val country: String = "",
+    val originalLang: String = "",
+    val director: String = "",
     val runtimeMinutes: Int = 0,
     val seasonsCount: Int = 1,
     val rating: Double = 0.0,
     val imdbRating: String = "",
     val tmdbRating: String = "",
     val rtRating: String = "",
+    val audienceRating: String = "",
     val metacriticRating: String = "",
     val letterboxdRating: String = "",
     val malRating: String = "",
+    val trailerKey: String = "",
     val genres: List<String> = emptyList(),
     val episodes: List<EpisodeItem> = emptyList(),
     val cast: List<CastMember> = emptyList(),
     val companies: List<CompanyItem> = emptyList(),
-    val network: String = "",
-    val networkId: Int = 0,
     val recommendations: List<MediaItem> = emptyList(),
     val sourceAddon: String = ""
 ) {
@@ -42,6 +47,13 @@ data class MediaItem(
             titleAr.ifBlank { titleEn }
         }
     }
+
+    fun formattedRuntime(): String {
+        if (runtimeMinutes <= 0) return ""
+        val h = runtimeMinutes / 60
+        val m = runtimeMinutes % 60
+        return if (h > 0) "${h}h ${m}m" else "${m}m"
+    }
 }
 
 data class EpisodeItem(
@@ -51,7 +63,8 @@ data class EpisodeItem(
     val overview: String = "",
     val stillUrl: String = "",
     val airDate: String = "",
-    val runtime: Int = 0
+    val runtime: Int = 0,
+    val rating: String = ""
 )
 
 data class CastMember(
@@ -65,6 +78,7 @@ data class CompanyItem(
     val id: Int,
     val name: String,
     val logoUrl: String = "",
+    val originCountry: String = "",
     val isNetwork: Boolean = false
 )
 
@@ -111,18 +125,26 @@ data class UnifiedStream(
 
 data class AppSettings(
     val tmdbEnabled: Boolean = true,
+    val tmdbApplyHome: Boolean = true,
+    val tmdbApplyContinue: Boolean = true,
     val tmdbLanguage: String = "ar-SA",
     val tmdbArtwork: Boolean = true,
     val tmdbBasicInfo: Boolean = true,
+    val tmdbDetails: Boolean = true,
     val tmdbCast: Boolean = true,
     val tmdbCompanies: Boolean = true,
     val tmdbNetworks: Boolean = true,
     val tmdbEpisodes: Boolean = true,
+    val tmdbTrailers: Boolean = true,
     val tmdbRecommendations: Boolean = true,
+    val autoTranslateArabic: Boolean = true,
+    val mdbListEnabled: Boolean = true,
     val mdbListApiKey: String = "",
+    val mdbShowOnHero: Boolean = true,
     val showImdbRating: Boolean = true,
     val showTmdbRating: Boolean = true,
     val showRtRating: Boolean = true,
+    val showAudienceRating: Boolean = true,
     val showMcRating: Boolean = true,
     val showLbRating: Boolean = true,
     val showMalRating: Boolean = true,
@@ -132,12 +154,14 @@ data class AppSettings(
     val preferEnglishTitles: Boolean = false,
     val showContinueWatching: Boolean = true,
     val autoPlayNextEpisode: Boolean = true,
-    val subtitleFontSize: Float = 22f,
+    val subtitleFontPercent: Int = 100,
     val subtitleBold: Boolean = true,
+    val subtitleItalic: Boolean = false,
     val subtitleColorHex: Long = 0xFFFFFFFF,
-    val subtitleBgOpacity: Float = 0.55f,
+    val subtitleTextOpacity: Int = 100,
+    val subtitleBgOpacity: Int = 40,
     val subtitleOutline: Boolean = true,
-    val subtitleBottomPadding: Float = 42f
+    val subtitleDelayMs: Long = 0L
 )
 
 @Entity(tableName = "addons")
