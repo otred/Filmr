@@ -680,8 +680,7 @@ fun NuvioDetailsScreen(
                         if (filtered.isEmpty()) {
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(
-                                    text = "لا توجد روابط متاحة حالياً.
-تأكد من تثبيت إضافة تورنت (مثل Torrentio) في الإعدادات.",
+                                    text = "لا توجد روابط متاحة حالياً. تأكد من تثبيت إضافة تورنت (مثل Torrentio) في الإعدادات.",
                                     color = Color.LightGray,
                                     fontSize = 13.sp
                                 )
